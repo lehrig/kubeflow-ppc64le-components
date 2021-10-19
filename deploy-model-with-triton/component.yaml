@@ -13,7 +13,7 @@ metadata:
     author: Sebastian Lehrig <Sebastian.Lehrig1@ibm.com>
 implementation:
   container:
-    image: quay.io/ibm/kubeflow-component-deploy-model-with-triton@sha256:9a291c2f196d360640ed678bc9ff29e8c9b4ca9478797c8dde60e8ec06be5b64
+    image: quay.io/ibm/kubeflow-component-deploy-model-with-triton@sha256:100fa45c7ef8b0910cf889026386e4b19505c38f099079464bc5f26f1835e27c
     command:
     - bash
     - -exc
