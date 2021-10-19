@@ -13,7 +13,7 @@ metadata:
     author: Sebastian Lehrig <Sebastian.Lehrig1@ibm.com>
 implementation:
   container:
-    image: quay.io/ibm/kubeflow-component-deploy-model-with-triton@sha256:100fa45c7ef8b0910cf889026386e4b19505c38f099079464bc5f26f1835e27c
+    image: quay.io/ibm/kubeflow-component-deploy-model-with-triton@sha256:3728c686ddc651f21f32b68d69a93e9829bfaa7837a1d5852fd48d797796a65c
     command:
     - bash
     - -exc
@@ -31,6 +31,16 @@ implementation:
       mkdir -p "$(dirname "$output_secret_result")"
       mkdir -p "$(dirname "$output_deployment_result")"
       mkdir -p "$(dirname "$output_service_result")"
+
+      yq e -i '.metadata.name = "'$model_name-deployment'"' deployment.yaml
+      yq e -i '.metadata.labels.app = "'$model_name'"' deployment.yaml
+      yq e -i '.spec.selector.matchLabels.app = "'$model_name'"' deployment.yaml
+      yq e -i '.spec.template.spec.containers.[0].name = "'$model_name'"' deployment.yaml
+      yq e -i '.spec.template.spec.containers.[0].args = ["tritonserver", "--model-store='$s3_address'","--model-control-mode=poll", "--repository-poll-secs=5"]' deployment.yaml
+
+      yq e -i '.metadata.name = "'$model_name-deployment'"' service.yaml
+      yq e -i '.metadata.labels.app = "'$model_name'"' service.yaml
+      yq e -i '.spec.selector.app = "'$model_name'"' service.yaml
 
       kubectl apply -f "secrets.yaml" --output=json > "$output_secret_result"
       kubectl apply -f "deployment.yaml" --output=json > "$output_deployment_result"
