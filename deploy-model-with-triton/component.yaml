@@ -35,8 +35,9 @@ implementation:
       yq e -i '.metadata.name = "'$model_name-deployment'"' deployment.yaml
       yq e -i '.metadata.labels.app = "'$model_name'"' deployment.yaml
       yq e -i '.spec.selector.matchLabels.app = "'$model_name'"' deployment.yaml
+      yq e -i '.spec.template.metadata.labels.app = "'$model_name'"' deployment.yaml
       yq e -i '.spec.template.spec.containers.[0].name = "'$model_name'"' deployment.yaml
-      yq e -i '.spec.template.spec.containers.[0].args = ["tritonserver", "--model-store='$s3_address'","--model-control-mode=poll", "--repository-poll-secs=5"]' deployment.yaml
+      yq e -i '.spec.template.spec.containers.[0].args = ["tritonserver", "--model-store='$s3_address'", "--model-control-mode=poll", "--repository-poll-secs=5"] | ..style="double"' deployment.yaml
 
       yq e -i '.metadata.name = "'$model_name-deployment'"' service.yaml
       yq e -i '.metadata.labels.app = "'$model_name'"' service.yaml
