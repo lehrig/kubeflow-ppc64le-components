@@ -1,0 +1,47 @@
+name: Deploy Model with Triton Inference Server
+inputs:
+- {name: Name, type: String}
+- {name: S3-Address, type: String}
+outputs:
+- {name: Name, type: String}
+- {name: Kind, type: String}
+- {name: Secret-Result, type: JsonObject}
+- {name: Deployment-Result, type: JsonObject}
+- {name: Service-Result, type: JsonObject}
+metadata:
+  annotations:
+    author: Sebastian Lehrig <Sebastian.Lehrig1@ibm.com>
+implementation:
+  container:
+    image: ibmcom/kubectl-ppc64le:v1.19.3
+    command:
+    - bash
+    - -exc
+    - |
+      model_name=$0
+      s3_address=$1
+      output_name_path=$2
+      output_kind_path=$3
+      output_secret_result=$4
+      output_deployment_result=$5
+      output_service_result=$6
+      
+      mkdir -p "$(dirname "$output_name_path")"
+      mkdir -p "$(dirname "$output_kind_path")"
+      mkdir -p "$(dirname "$output_secret_result")"
+      mkdir -p "$(dirname "$output_deployment_result")"
+      mkdir -p "$(dirname "$output_service_result")"
+
+      kubectl apply -f "secrets.yaml" --output=json > "$output_secret_result"
+      kubectl apply -f "deployment.yaml" --output=json > "$output_deployment_result"
+      kubectl apply -f "service.yaml" --output=json > "$output_service_result"
+      < "$output_deployment_result" jq '.metadata.name' --raw-output > "$output_name_path"
+      < "$output_deployment_result" jq '.kind' --raw-output > "$output_kind_path"
+    - {inputValue: Name}
+    - {inputValue: S3-Address}
+    - {outputPath: Name}
+    - {outputPath: Kind}
+    - {outputPath: Secret-Result}
+    - {outputPath: Deployment-Result}
+    - {outputPath: Service-Result}
+
