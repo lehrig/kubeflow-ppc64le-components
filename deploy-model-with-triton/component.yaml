@@ -1,10 +1,10 @@
 name: Deploy Model with Triton Inference Server
 inputs:
-- {name: Name, type: String}
+- {name: Model-Name, type: String}
 - {name: S3-Address, type: String}
 outputs:
-- {name: Name, type: String}
-- {name: Kind, type: String}
+- {name: Deployment-Name, type: String}
+- {name: Deployment-Kind, type: String}
 - {name: Secret-Result, type: JsonObject}
 - {name: Deployment-Result, type: JsonObject}
 - {name: Service-Result, type: JsonObject}
@@ -48,10 +48,10 @@ implementation:
       kubectl apply -f "service.yaml" --output=json > "$output_service_result"
       < "$output_deployment_result" jq '.metadata.name' --raw-output > "$output_name_path"
       < "$output_deployment_result" jq '.kind' --raw-output > "$output_kind_path"
-    - {inputValue: Name}
+    - {inputValue: Model-Name}
     - {inputValue: S3-Address}
-    - {outputPath: Name}
-    - {outputPath: Kind}
+    - {outputPath: Deployment-Name}
+    - {outputPath: Deployment-Kind}
     - {outputPath: Secret-Result}
     - {outputPath: Deployment-Result}
     - {outputPath: Service-Result}
