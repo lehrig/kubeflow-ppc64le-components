@@ -1,0 +1,61 @@
+name: Deploy Model with TensorFlow Serving
+inputs:
+- {name: Model-Name, type: String}
+- {name: S3-Address, type: String}
+outputs:
+- {name: Deployment-Name, type: String}
+- {name: Deployment-Kind, type: String}
+- {name: Minio-Result, type: JsonObject}
+- {name: TFServing-Result, type: JsonObject}
+metadata:
+  annotations:
+    author: Sebastian Lehrig <Sebastian.Lehrig1@ibm.com>
+implementation:
+  container:
+    image: quay.io/ibm/kubeflow-component-deploy-model-with-tfserving@sha256:3728c686ddc651f21f32b68d69a93e9829bfaa7837a1d5852fd48d797796a65c
+    command:
+    - bash
+    - -exc
+    - |
+      model_name=$0
+      s3_address=$1
+      output_name_path=$2
+      output_kind_path=$3
+      output_minio_result=$4
+      output_tfserving_result=$5
+      
+      mkdir -p "$(dirname "$output_name_path")"
+      mkdir -p "$(dirname "$output_kind_path")"
+      mkdir -p "$(dirname "$output_minio_result")"
+      mkdir -p "$(dirname "$output_tfserving_result")"
+
+      yq e -i 'select(di == 0) | .metadata.labels.app = "'$model_name'"' tfserving.yaml
+      yq e -i 'select(di == 0) | .metadata.name = "'$model_name-service'"' tfserving.yaml
+      yq e -i 'select(di == 0) | .spec.selector.app = "'$model_name'"' tfserving.yaml
+
+      yq e -i 'select(di == 1) | .metadata.labels.app = "'$model_name'"' tfserving.yaml
+      yq e -i 'select(di == 1) | .metadata.name = "'$model_name-service-deployment'"' tfserving.yaml
+      yq e -i 'select(di == 1) | .spec.selector.matchLabels.app = "'$model_name'"' tfserving.yaml
+      yq e -i 'select(di == 1) | .spec.template.metadata.labels.app = "'$model_name'"' tfserving.yaml
+      yq e -i 'select(di == 1) | .spec.template.spec.containers[0].args = ["--port=9000", "--rest_api_port=8500", "--model_name=monkey-model", "--model_base_path='$s3_address'"]' tfserving.yaml
+      yq e -i 'select(di == 1) | .spec.template.spec.containers[0].name = "'$model_name'"' tfserving.yaml
+
+      yq e -i 'select(di == 2) | .metadata.name = "'$model_name-destinationrule'"' tfserving.yaml
+      yq e -i 'select(di == 2) | .spec.host = "'$model_name-service'"' tfserving.yaml
+
+      yq e -i 'select(di == 3) | .metadata.name = "'$model_name-virtualservice'"' tfserving.yaml
+      yq e -i 'select(di == 3) | .spec.http.match.method.uri.prefix = "'/tfserving/models/$model_name'"' tfserving.yaml
+      yq e -i 'select(di == 3) | .spec.http.match.rewrite.uri = "'/v1/models/$model_name:predict'"' tfserving.yaml
+      yq e -i 'select(di == 3) | .spec.http.match.route.destination.host = "'$model_name-service'"' tfserving.yaml
+
+      kubectl apply -f "minio.yaml" --output=json > "$output_minio_result"
+      kubectl apply -f "tfserving.yaml" --output=json > "$output_tfserving_result"
+      < "$output_tfserving_result" jq '.metadata.name' --raw-output > "$output_name_path"
+      < "$output_tfserving_result" jq '.kind' --raw-output > "$output_kind_path"
+    - {inputValue: Model-Name}
+    - {inputValue: S3-Address}
+    - {outputPath: Deployment-Name}
+    - {outputPath: Deployment-Kind}
+    - {outputPath: Minio-Result}
+    - {outputPath: TFServing-Result}
+
