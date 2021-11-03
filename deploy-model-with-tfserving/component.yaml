@@ -1,12 +1,12 @@
 name: Deploy Model with TensorFlow Serving
 inputs:
-- {name: Model-Name, type: String}
-- {name: S3-Address, type: String}
+- {name: ModelName, type: String}
+- {name: S3Address, type: String}
 outputs:
-- {name: Deployment-Name, type: String}
-- {name: Deployment-Kind, type: String}
-- {name: Minio-Result, type: JsonObject}
-- {name: TFServing-Result, type: JsonObject}
+- {name: DeploymentName, type: String}
+- {name: DeploymentKind, type: String}
+- {name: MinioResult, type: JsonObject}
+- {name: TFServingResult, type: JsonObject}
 metadata:
   annotations:
     author: Sebastian Lehrig <Sebastian.Lehrig1@ibm.com>
@@ -52,10 +52,10 @@ implementation:
       kubectl apply -f "tfserving.yaml" --output=json > "$output_tfserving_result"
       < "$output_tfserving_result" jq '.metadata.name' --raw-output > "$output_name_path"
       < "$output_tfserving_result" jq '.kind' --raw-output > "$output_kind_path"
-    - {inputValue: Model-Name}
-    - {inputValue: S3-Address}
-    - {outputPath: Deployment-Name}
-    - {outputPath: Deployment-Kind}
-    - {outputPath: Minio-Result}
-    - {outputPath: TFServing-Result}
+    - {inputValue: ModelName}
+    - {inputValue: S3Address}
+    - {outputPath: DeploymentName}
+    - {outputPath: DeploymentKind}
+    - {outputPath: MinioResult}
+    - {outputPath: TFServingResult}
 
