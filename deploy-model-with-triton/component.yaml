@@ -1,13 +1,13 @@
 name: Deploy Model with Triton Inference Server
 inputs:
-- {name: Model-Name, type: String}
-- {name: S3-Address, type: String}
+- {name: ModelName, type: String}
+- {name: S3Address, type: String}
 outputs:
-- {name: Deployment-Name, type: String}
-- {name: Deployment-Kind, type: String}
-- {name: Secret-Result, type: JsonObject}
-- {name: Deployment-Result, type: JsonObject}
-- {name: Service-Result, type: JsonObject}
+- {name: DeploymentName, type: String}
+- {name: DeploymentKind, type: String}
+- {name: SecretResult, type: JsonObject}
+- {name: DeploymentResult, type: JsonObject}
+- {name: ServiceResult, type: JsonObject}
 metadata:
   annotations:
     author: Sebastian Lehrig <Sebastian.Lehrig1@ibm.com>
@@ -48,11 +48,11 @@ implementation:
       kubectl apply -f "service.yaml" --output=json > "$output_service_result"
       < "$output_deployment_result" jq '.metadata.name' --raw-output > "$output_name_path"
       < "$output_deployment_result" jq '.kind' --raw-output > "$output_kind_path"
-    - {inputValue: Model-Name}
-    - {inputValue: S3-Address}
-    - {outputPath: Deployment-Name}
-    - {outputPath: Deployment-Kind}
-    - {outputPath: Secret-Result}
-    - {outputPath: Deployment-Result}
-    - {outputPath: Service-Result}
+    - {inputValue: ModelName}
+    - {inputValue: S3Address}
+    - {outputPath: DeploymentName}
+    - {outputPath: DeploymentKind}
+    - {outputPath: SecretResult}
+    - {outputPath: DeploymentResult}
+    - {outputPath: ServiceResult}
 
