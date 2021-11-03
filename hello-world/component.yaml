@@ -1,0 +1,12 @@
+name: Hellow World Kubeflow Component
+metadata:
+  annotations:
+    author: Sebastian Lehrig <Sebastian.Lehrig1@ibm.com>
+implementation:
+  container:
+    image: python:37
+    command:
+    - sh
+    - -ec
+    - |
+      python3 -c "print('Hello World!')"
