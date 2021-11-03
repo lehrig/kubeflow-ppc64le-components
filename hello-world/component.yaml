@@ -4,7 +4,7 @@ metadata:
     author: Sebastian Lehrig <Sebastian.Lehrig1@ibm.com>
 implementation:
   container:
-    image: python:37
+    image: python:3.7
     command:
     - sh
     - -ec
