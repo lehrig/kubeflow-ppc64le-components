@@ -11,3 +11,4 @@ implementation:
       python3,
       -c, "import sys; print(f'Text: {sys.argv[1]}')",
       {inputValue: Text}
+    ]
