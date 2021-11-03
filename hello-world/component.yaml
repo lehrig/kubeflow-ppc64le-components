@@ -1,12 +1,13 @@
 name: Hello World Kubeflow Component
+inputs:
+- {name: Text, type: String}
 metadata:
   annotations:
     author: Sebastian Lehrig <Sebastian.Lehrig1@ibm.com>
 implementation:
   container:
     image: python:3.7
-    command:
-    - sh
-    - -ec
-    - |
-      python3 -c "print('Hello World!')"
+    command: [
+      python3,
+      -c, "import sys; print(f'Text: {sys.argv[1]}')",
+      {inputValue: Text}
