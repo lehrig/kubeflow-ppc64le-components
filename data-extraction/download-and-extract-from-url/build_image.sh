@@ -1,5 +1,5 @@
 #!/bin/bash -e
-image_name=quay.io/ibm/kubeflow-component-download-from-url
+image_name=quay.io/ibm/kubeflow-component-download-and-extract-from-url
 image_tag=latest
 full_image_name=${image_name}:${image_tag}
 

@@ -1,0 +1,22 @@
+name: Download and Extract from URL
+description: Downloads and extractions packaged files (zip/tar/tar.gz) from a URL to a persistent volume.
+inputs:
+- {name: URL, type: String}
+- {name: FileName, type: String}
+outputs:
+- {name: DataPath, type: String}
+metadata:
+  annotations:
+    author: Sebastian Lehrig <Sebastian.Lehrig1@ibm.com>
+implementation:
+  container:
+    image: quay.io/ibm/kubeflow-component-download-and-extract-from-url:latest
+    command: [python, /bin/download-and-extract-from-url.py]
+    args: 
+      - --url
+      - {inputValue: URL}
+      - --fileName
+      - {inputValue: FileName}
+      - --dataPath
+      - {outputPath: DataPath}
+
