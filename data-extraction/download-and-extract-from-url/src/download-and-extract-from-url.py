@@ -21,7 +21,13 @@ def get_arg_parser():
 
 
 def main(args):
-    logging.getLogger(__name__).setLevel(logging.INFO)
+    root = logging.getLogger(__name__)
+    root.setLevel(logging.INFO)
+    
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setLevel(logging.INFO)
+    root.addHandler(handler)
+    
     logging.info("Downloading from URL: " + args.url)
     
     file = args.fileName
