@@ -10,7 +10,7 @@ metadata:
     author: Sebastian Lehrig <Sebastian.Lehrig1@ibm.com>
 implementation:
   container:
-    image: quay.io/ibm/kubeflow-component-download-and-extract-from-url@sha256:02b715a1d571dafb66950d1a0c2125d12ef0da4746f7dbfa877e21036ea986a5
+    image: quay.io/ibm/kubeflow-component-download-and-extract-from-url@sha256:2917286c664c4c0d436c4abc591fabfc8f87edcd1dbe9d706f15c8e649f2497a
     command: [python, /bin/download-and-extract-from-url.py]
     args: 
       - --url
