@@ -11,7 +11,7 @@ metadata:
 implementation:
   container:
     image: quay.io/ibm/kubeflow-component-download-and-extract-from-url@sha256:66b72558a6048aeb6c9f79df1230069921dcfbc5fc5fd0dcabffe4004def32b1
-    command: [python, /bin/download-and-extract-from-url.py]
+    command: [python, -u, /bin/download-and-extract-from-url.py]
     args: 
       - --url
       - {inputValue: URL}
