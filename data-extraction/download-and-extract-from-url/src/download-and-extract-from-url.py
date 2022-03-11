@@ -39,7 +39,7 @@ def main(args):
         with tarfile.open(file, "r:gz") as tar_gz_ref:
             tar_gz_ref.extractall(args.dataPath)
     elif file.endswith("tar"):
-        with tarfile.open(file, "r:") as tar_ref
+        with tarfile.open(file, "r:") as tar_ref:
             tari_ref.extractall(args.dataPath)
 
     logging.info("Result:")
