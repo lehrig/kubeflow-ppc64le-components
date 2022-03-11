@@ -23,10 +23,9 @@ def get_arg_parser():
 def main(args):
     logging.getLogger(__name__).setLevel(logging.INFO)
     logging.info("Downloading from URL: " + args.url)
-    logging.info("Downloading to persistent volume: " + args.persistentVolume)
-
-    logging.info("Downloading...")
+    
     file = args.fileName
+    logging.info("Downloading to persistent volume: " + file + "...")
     run(['wget', args.url, '-O', file], capture_output=True)
     logging.info("Downloaded to " + file)
 
