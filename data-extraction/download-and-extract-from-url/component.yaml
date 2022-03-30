@@ -2,9 +2,9 @@ name: Download and Extract from URL
 description: Downloads and extractions packaged files (zip/tar/tar.gz) from a URL to a persistent volume.
 inputs:
 - {name: URL, type: String}
-- {name: FileName, type: String}
+- {name: File Name, type: String}
 outputs:
-- {name: DataPath, type: String}
+- {name: Data Path, type: String}
 metadata:
   annotations:
     author: Sebastian Lehrig <Sebastian.Lehrig1@ibm.com>
@@ -16,7 +16,7 @@ implementation:
       - --url
       - {inputValue: URL}
       - --fileName
-      - {inputValue: FileName}
+      - {inputValue: File Name}
       - --dataPath
-      - {outputPath: DataPath}
+      - {outputPath: Data Path}
 
