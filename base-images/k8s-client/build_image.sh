@@ -1,5 +1,5 @@
 #!/bin/bash -e
-image_name=quay.io/ibm/kubeflow-component-deploy-model-with-triton
+image_name=quay.io/ibm/kubeflow-component-base-image-k8s-client
 image_tag=latest
 full_image_name=${image_name}:${image_tag}
 

@@ -1,58 +1,159 @@
 name: Deploy Model with Triton Inference Server
 inputs:
-- {name: ModelName, type: String}
-- {name: S3Address, type: String}
+- {name: Model Name, type: String, default: 'my-model', description: 'Name of the model. Must be unique for the targeted namespace and conform Kubernetes naming conventions. Example: my-model.'}
+- {name: S3 Address, type: String, description: 'S3-address where the model resides (typically in MinIO). Note that you have to point to the model root path, not a concrete version. Example: s3://minio-service-kubeflow.apps:80/my-model-repository/my-model.'}
 outputs:
-- {name: DeploymentName, type: String}
-- {name: DeploymentKind, type: String}
-- {name: SecretResult, type: JsonObject}
-- {name: DeploymentResult, type: JsonObject}
-- {name: ServiceResult, type: JsonObject}
+- {name: Endpoint, type: String, description: 'REST endpoint where the model can be queried. Example: http://my-model-service-kubeflow.apps/v1/models/my-model:predict.'}
 metadata:
   annotations:
     author: Sebastian Lehrig <Sebastian.Lehrig1@ibm.com>
 implementation:
   container:
-    image: quay.io/ibm/kubeflow-component-deploy-model-with-triton@sha256:3728c686ddc651f21f32b68d69a93e9829bfaa7837a1d5852fd48d797796a65c
+    image: quay.io/ibm/kubeflow-component-base-image-k8s-client:latest
     command:
     - bash
     - -exc
     - |
       model_name=$0
       s3_address=$1
-      output_name_path=$2
-      output_kind_path=$3
-      output_secret_result=$4
-      output_deployment_result=$5
-      output_service_result=$6
+      output_endpoint=$2
       
-      mkdir -p "$(dirname "$output_name_path")"
-      mkdir -p "$(dirname "$output_kind_path")"
-      mkdir -p "$(dirname "$output_secret_result")"
-      mkdir -p "$(dirname "$output_deployment_result")"
-      mkdir -p "$(dirname "$output_service_result")"
+      mkdir -p "$(dirname "$output_endpoint")"
 
-      yq e -i '.metadata.name = "'$model_name-deployment'"' deployment.yaml
-      yq e -i '.metadata.labels.app = "'$model_name'"' deployment.yaml
-      yq e -i '.spec.selector.matchLabels.app = "'$model_name'"' deployment.yaml
-      yq e -i '.spec.template.metadata.labels.app = "'$model_name'"' deployment.yaml
-      yq e -i '.spec.template.spec.containers.[0].name = "'$model_name'"' deployment.yaml
-      yq e -i '.spec.template.spec.containers.[0].args = ["tritonserver", "--model-store='$s3_address'", "--model-control-mode=poll", "--repository-poll-secs=5"]' deployment.yaml
+cat > triton-resources.yaml <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: minio-credentials
+type: Opaque
+data:
+  AWS_ACCESS_KEY_ID: bWluaW8=          #minio as base64
+  AWS_SECRET_ACCESS_KEY: bWluaW8xMjM=     #minio123 as base64
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: "${model_name}-deployment"
+  labels:
+    app: "${model_name}"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: "${model_name}"
+  template:
+    metadata:
+      labels:
+        app: "${model_name}"
 
-      yq e -i '.metadata.name = "'$model_name-deployment'"' service.yaml
-      yq e -i '.metadata.labels.app = "'$model_name'"' service.yaml
-      yq e -i '.spec.selector.app = "'$model_name'"' service.yaml
+    spec:
+      containers:
+        - name: "${model_name}"
+          image: "quay.io/ibm/tritonserver-ppc64le:v2.13.0"
+          imagePullPolicy: "IfNotPresent"
 
-      kubectl apply -f "secrets.yaml" --output=json > "$output_secret_result"
-      kubectl apply -f "deployment.yaml" --output=json > "$output_deployment_result"
-      kubectl apply -f "service.yaml" --output=json > "$output_service_result"
-      < "$output_deployment_result" jq '.metadata.name' --raw-output > "$output_name_path"
-      < "$output_deployment_result" jq '.kind' --raw-output > "$output_kind_path"
-    - {inputValue: ModelName}
-    - {inputValue: S3Address}
-    - {outputPath: DeploymentName}
-    - {outputPath: DeploymentKind}
-    - {outputPath: SecretResult}
-    - {outputPath: DeploymentResult}
-    - {outputPath: ServiceResult}
+          resources:
+            limits:
+              nvidia.com/gpu: 0
+
+          args: ["tritonserver", "--model-store=${s3_address}", 
+                 "--model-control-mode=poll",
+                 "--repository-poll-secs=5"]
+
+          env:
+          - name: AWS_ACCESS_KEY_ID
+            valueFrom:
+              secretKeyRef:
+                name: minio-credentials
+                key: AWS_ACCESS_KEY_ID
+          - name: AWS_SECRET_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: minio-credentials
+                key: AWS_SECRET_ACCESS_KEY
+
+          ports:
+            - containerPort: 8000
+              name: http
+            - containerPort: 8001
+              name: grpc
+            - containerPort: 8002
+              name: metrics
+          livenessProbe:
+            httpGet:
+              path: /v2/health/live
+              port: http
+          readinessProbe:
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            httpGet:
+              path: /v2/health/ready
+              port: http
+
+              #      securityContext:
+              #        runAsUser: 1000
+              #        fsGroup: 1000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: "${model_name}-service"
+  labels:
+    app: "${model_name}"
+spec:
+  type: "LoadBalancer"
+  ports:
+    - port: 8000
+      targetPort: http
+      name: http-inference-server
+    - port: 8001
+      targetPort: grpc
+      name: grpc-inference-server
+  selector:
+    app: "${model_name}"
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  labels:
+  name: ${model_name}-destinationrule
+spec:
+  host: ${model_name}-service
+  subsets:
+  - labels:
+      version: v1
+    name: v1
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  labels:
+  name: ${model_name}-virtualservice
+spec:
+  gateways:
+  - kubeflow-gateway
+  hosts:
+  - '*'
+  http:
+  - match:
+    - method:
+        exact: POST
+      uri:
+        prefix: /serving/models/${model_name}
+    rewrite:
+      uri: /v1/models/${model_name}:predict
+    route:
+    - destination:
+        host: ${model_name}-service
+        port:
+          number: 8500
+        subset: v1
+      weight: 100
+EOF
+
+      kubectl apply -f "triton-resources.yaml"
+      echo "http://your-kubeflow-url/serving/models/${model_name}" > "$output_endpoint"
+    - {inputValue: Model Name}
+    - {inputValue: S3 Address}
+    - {outputPath: Endpoint}
 

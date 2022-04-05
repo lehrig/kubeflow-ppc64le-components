@@ -1,12 +1,9 @@
 name: Deploy Model with TensorFlow Serving
 inputs:
-- {name: ModelName, type: String}
-- {name: S3Address, type: String}
+- {name: Model Name, type: String, default: 'my-model', description: 'Name of the model. Must be unique for the targeted namespace and conform Kubernetes naming conventions. Example: my-model.'}
+- {name: S3 Address, type: String, description: 'S3-address where the model resides (typically in MinIO). Note that you have to point to the model root path, not a concrete version. Example: s3://minio-service-kubeflow.apps:80/my-model-repository/my-model.'}
 outputs:
-- {name: DeploymentName, type: String}
-- {name: DeploymentKind, type: String}
-- {name: MinioResult, type: JsonObject}
-- {name: TFServingResult, type: JsonObject}
+- {name: Endpoint, type: String, description: 'REST endpoint where the model can be queried. Example: http://my-model-service-kubeflow.apps/v1/models/my-model:predict.'}
 metadata:
   annotations:
     author: Sebastian Lehrig <Sebastian.Lehrig1@ibm.com>
@@ -19,43 +16,163 @@ implementation:
     - |
       model_name=$0
       s3_address=$1
-      output_name_path=$2
-      output_kind_path=$3
-      output_minio_result=$4
-      output_tfserving_result=$5
+      output_endpoint=$2
+
+      mkdir -p "$(dirname "$output_endpoint")" 
       
-      mkdir -p "$(dirname "$output_name_path")"
-      mkdir -p "$(dirname "$output_kind_path")"
-      mkdir -p "$(dirname "$output_minio_result")"
-      mkdir -p "$(dirname "$output_tfserving_result")"
+cat > tfserving-resources.yaml <<EOF
+apiVersion: v1
+data:
+  AWS_ACCESS_KEY_ID: bWluaW8=
+  AWS_SECRET_ACCESS_KEY: bWluaW8xMjM=
+kind: Secret
+metadata:
+  annotations:
+    serving.kubeflow.org/s3-endpoint: minio-service.kubeflow:9000
+    serving.kubeflow.org/s3-usehttps: "0"
+  name: minio-s3-secret
+  namespace: kubeflow
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sa
+  namespace: kubeflow
+secrets:
+- name: minio-s3-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: ${model_name}
+  name: ${model_name}-service
+spec:
+  ports:
+  - name: grpc-tf-serving
+    port: 9000
+    targetPort: 9000
+  - name: http-tf-serving
+    port: 8500
+    targetPort: 8500
+  selector:
+    app: ${model_name}
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: ${model_name}
+  name: ${model_name}-deployment
+spec:
+  selector:
+    matchLabels:
+      app: ${model_name}
+  template:
+    metadata:
+      annotations:
+        sidecar.istio.io/inject: "true"
+      labels:
+        app: ${model_name}
+        version: v1
+    spec:
+      containers:
+      - args:
+        - --port=9000
+        - --rest_api_port=8500
+        - --model_name=${model_name}
+        - --model_base_path=${s3_address}
+#        - --monitoring_config_file=/var/config/monitoring_config.txt
+        command:
+        - /usr/bin/tensorflow_model_server
+        env:
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              key: AWS_ACCESS_KEY_ID
+              name: minio-s3-secret
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              key: AWS_SECRET_ACCESS_KEY
+              name: minio-s3-secret
+        - name: AWS_REGION
+          value: us-west-1
+        - name: S3_USE_HTTPS
+          value: "0"
+        - name: S3_VERIFY_SSL
+          value: "0"
+        - name: S3_ENDPOINT
+          value: minio-service:9000
+        image: quay.io/ibm/kubeflow-tensorflow-serving-ppc64le:2.4.1
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          tcpSocket:
+            port: 9000
+        name: ${model_name}
+        ports:
+        - containerPort: 9000
+        - containerPort: 8500
+        resources:
+          limits:
+            cpu: "4"
+            memory: 4Gi
+          requests:
+            cpu: "1"
+            memory: 1Gi
+        volumeMounts:
+        - mountPath: /var/config/
+          name: config-volume
+      volumes:
+      - configMap:
+          name: workflow-controller-configmap
+        name: config-volume
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  labels:
+  name: ${model_name}-destinationrule
+spec:
+  host: ${model_name}-service
+  subsets:
+  - labels:
+      version: v1
+    name: v1
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  labels:
+  name: ${model_name}-virtualservice
+spec:
+  gateways:
+  - kubeflow-gateway
+  hosts:
+  - '*'
+  http:
+  - match:
+    - method:
+        exact: POST
+      uri:
+        prefix: /serving/models/${model_name}
+    rewrite:
+      uri: /v1/models/${model_name}:predict
+    route:
+    - destination:
+        host: ${model_name}-service
+        port:
+          number: 8500
+        subset: v1
+      weight: 100
+EOF
 
-      yq e -i 'select(di == 0) | .metadata.labels.app = "'$model_name'"' tfserving.yaml
-      yq e -i 'select(di == 0) | .metadata.name = "'$model_name-service'"' tfserving.yaml
-      yq e -i 'select(di == 0) | .spec.selector.app = "'$model_name'"' tfserving.yaml
-
-      yq e -i 'select(di == 1) | .metadata.labels.app = "'$model_name'"' tfserving.yaml
-      yq e -i 'select(di == 1) | .metadata.name = "'$model_name-service-deployment'"' tfserving.yaml
-      yq e -i 'select(di == 1) | .spec.selector.matchLabels.app = "'$model_name'"' tfserving.yaml
-      yq e -i 'select(di == 1) | .spec.template.metadata.labels.app = "'$model_name'"' tfserving.yaml
-      yq e -i 'select(di == 1) | .spec.template.spec.containers[0].args = ["--port=9000", "--rest_api_port=8500", "--model_name=monkey-model", "--model_base_path='$s3_address'"]' tfserving.yaml
-      yq e -i 'select(di == 1) | .spec.template.spec.containers[0].name = "'$model_name'"' tfserving.yaml
-
-      yq e -i 'select(di == 2) | .metadata.name = "'$model_name-destinationrule'"' tfserving.yaml
-      yq e -i 'select(di == 2) | .spec.host = "'$model_name-service'"' tfserving.yaml
-
-      yq e -i 'select(di == 3) | .metadata.name = "'$model_name-virtualservice'"' tfserving.yaml
-      yq e -i 'select(di == 3) | .spec.http.match.method.uri.prefix = "'/tfserving/models/$model_name'"' tfserving.yaml
-      yq e -i 'select(di == 3) | .spec.http.match.rewrite.uri = "'/v1/models/$model_name:predict'"' tfserving.yaml
-      yq e -i 'select(di == 3) | .spec.http.match.route.destination.host = "'$model_name-service'"' tfserving.yaml
-
-      kubectl apply -f "minio.yaml" --output=json > "$output_minio_result"
-      kubectl apply -f "tfserving.yaml" --output=json > "$output_tfserving_result"
-      < "$output_tfserving_result" jq '.metadata.name' --raw-output > "$output_name_path"
-      < "$output_tfserving_result" jq '.kind' --raw-output > "$output_kind_path"
-    - {inputValue: ModelName}
-    - {inputValue: S3Address}
-    - {outputPath: DeploymentName}
-    - {outputPath: DeploymentKind}
-    - {outputPath: MinioResult}
-    - {outputPath: TFServingResult}
+      kubectl apply -f "tfserving-resources.yaml"
+      echo "http://your-kubeflow-url/serving/models/${model_name}" > "$output_endpoint"
+    - {inputValue: Model Name}
+    - {inputValue: S3 Address}
+    - {outputPath: Endpoint}
 
