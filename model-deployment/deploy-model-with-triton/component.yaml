@@ -20,7 +20,7 @@ implementation:
       
       mkdir -p "$(dirname "$output_endpoint")"
 
-cat > triton-resources.yaml <<EOF
+      cat > triton-resources.yaml <<EOF
 apiVersion: v1
 kind: Secret
 metadata:
