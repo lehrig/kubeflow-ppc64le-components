@@ -4,8 +4,8 @@ ARG KUBECTL_VERSION=v1.21.11 # highest kubeflow-supported release
 
 RUN microdnf update && rm -rf /var/cache/yum && microdnf install -y \
   # Installs
-  curl \ # for downloading k8s client
-  jq \ # for kubectl output processing
+  curl \
+  jq \
   ##########
   && \
   microdnf clean all && \
