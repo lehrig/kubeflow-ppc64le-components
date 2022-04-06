@@ -127,7 +127,7 @@ implementation:
         name: ${model_name}-virtualservice
       spec:
         gateways:
-        - kubeflow-gateway
+        - kubeflow/kubeflow-gateway
         hosts:
         - '*'
         http:
