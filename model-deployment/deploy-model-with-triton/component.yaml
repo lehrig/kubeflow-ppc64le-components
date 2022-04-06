@@ -17,143 +17,137 @@ implementation:
       model_name=$0
       s3_address=$1
       output_endpoint=$2
-      
+
       mkdir -p "$(dirname "$output_endpoint")"
 
-      cat > triton-resources.yaml <<EOF
-apiVersion: v1
-kind: Secret
-metadata:
-  name: minio-credentials
-type: Opaque
-data:
-  AWS_ACCESS_KEY_ID: bWluaW8=          #minio as base64
-  AWS_SECRET_ACCESS_KEY: bWluaW8xMjM=     #minio123 as base64
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: "${model_name}-deployment"
-  labels:
-    app: "${model_name}"
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: "${model_name}"
-  template:
-    metadata:
-      labels:
-        app: "${model_name}"
+      cat <<EOF | kubectl apply -f -
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: minio-credentials
+      type: Opaque
+      data:
+        AWS_ACCESS_KEY_ID: bWluaW8=          #minio as base64
+        AWS_SECRET_ACCESS_KEY: bWluaW8xMjM=     #minio123 as base64
+      ---
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: "${model_name}-deployment"
+        labels:
+          app: "${model_name}"
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: "${model_name}"
+        template:
+          metadata:
+           labels:
+              app: "${model_name}"
 
-    spec:
-      containers:
-        - name: "${model_name}"
-          image: "quay.io/ibm/tritonserver-ppc64le:v2.13.0"
-          imagePullPolicy: "IfNotPresent"
+          spec:
+            containers:
+              - name: "${model_name}"
+                image: "quay.io/ibm/tritonserver-ppc64le:v2.13.0"
+                imagePullPolicy: "IfNotPresent"
 
-          resources:
-            limits:
-              nvidia.com/gpu: 0
+                resources:
+                  limits:
+                    nvidia.com/gpu: 0
 
-          args: ["tritonserver", "--model-store=${s3_address}", 
-                 "--model-control-mode=poll",
-                 "--repository-poll-secs=5"]
+                args: ["tritonserver", "--model-store=${s3_address}", 
+                       "--model-control-mode=poll",
+                       "--repository-poll-secs=5"]
 
-          env:
-          - name: AWS_ACCESS_KEY_ID
-            valueFrom:
-              secretKeyRef:
-                name: minio-credentials
-                key: AWS_ACCESS_KEY_ID
-          - name: AWS_SECRET_ACCESS_KEY
-            valueFrom:
-              secretKeyRef:
-                name: minio-credentials
-                key: AWS_SECRET_ACCESS_KEY
+                env:
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: minio-credentials
+                      key: AWS_ACCESS_KEY_ID
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: minio-credentials
+                      key: AWS_SECRET_ACCESS_KEY
 
-          ports:
-            - containerPort: 8000
-              name: http
-            - containerPort: 8001
-              name: grpc
-            - containerPort: 8002
-              name: metrics
-          livenessProbe:
-            httpGet:
-              path: /v2/health/live
-              port: http
-          readinessProbe:
-            initialDelaySeconds: 5
-            periodSeconds: 5
-            httpGet:
-              path: /v2/health/ready
-              port: http
-
-              #      securityContext:
-              #        runAsUser: 1000
-              #        fsGroup: 1000
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: "${model_name}-service"
-  labels:
-    app: "${model_name}"
-spec:
-  type: "LoadBalancer"
-  ports:
-    - port: 8000
-      targetPort: http
-      name: http-inference-server
-    - port: 8001
-      targetPort: grpc
-      name: grpc-inference-server
-  selector:
-    app: "${model_name}"
----
-apiVersion: networking.istio.io/v1alpha3
-kind: DestinationRule
-metadata:
-  labels:
-  name: ${model_name}-destinationrule
-spec:
-  host: ${model_name}-service
-  subsets:
-  - labels:
-      version: v1
-    name: v1
----
-apiVersion: networking.istio.io/v1alpha3
-kind: VirtualService
-metadata:
-  labels:
-  name: ${model_name}-virtualservice
-spec:
-  gateways:
-  - kubeflow-gateway
-  hosts:
-  - '*'
-  http:
-  - match:
-    - method:
-        exact: POST
-      uri:
-        prefix: /serving/models/${model_name}
-    rewrite:
-      uri: /v1/models/${model_name}:predict
-    route:
-    - destination:
+                ports:
+                  - containerPort: 8000
+                    name: http
+                  - containerPort: 8001
+                    name: grpc
+                  - containerPort: 8002
+                    name: metrics
+                livenessProbe:
+                  httpGet:
+                    path: /v2/health/live
+                    port: http
+                readinessProbe:
+                  initialDelaySeconds: 5
+                  periodSeconds: 5
+                  httpGet:
+                    path: /v2/health/ready
+                    port: http
+      ---
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: "${model_name}-service"
+        labels:
+          app: "${model_name}"
+      spec:
+        type: "LoadBalancer"
+        ports:
+          - port: 8000
+            targetPort: http
+            name: http-inference-server
+          - port: 8001
+            targetPort: grpc
+            name: grpc-inference-server
+        selector:
+          app: "${model_name}"
+      ---
+      apiVersion: networking.istio.io/v1alpha3
+      kind: DestinationRule
+      metadata:
+        labels:
+        name: ${model_name}-destinationrule
+      spec:
         host: ${model_name}-service
-        port:
-          number: 8500
-        subset: v1
-      weight: 100
-EOF
+        subsets:
+        - labels:
+            version: v1
+          name: v1
+      ---
+      apiVersion: networking.istio.io/v1alpha3
+      kind: VirtualService
+      metadata:
+        labels:
+        name: ${model_name}-virtualservice
+      spec:
+        gateways:
+        - kubeflow-gateway
+        hosts:
+        - '*'
+        http:
+        - match:
+          - method:
+              exact: POST
+            uri:
+              prefix: /serving/models/${model_name}
+          rewrite:
+            uri: /v1/models/${model_name}:predict
+          route:
+          - destination:
+              host: ${model_name}-service
+              port:
+                number: 8500
+              subset: v1
+            weight: 100
+      EOF
 
-      kubectl apply -f "triton-resources.yaml"
       echo "http://your-kubeflow-url/serving/models/${model_name}" > "$output_endpoint"
     - {inputValue: Model Name}
     - {inputValue: S3 Address}
     - {outputPath: Endpoint}
-
