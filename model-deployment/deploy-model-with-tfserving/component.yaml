@@ -9,7 +9,7 @@ metadata:
     author: Sebastian Lehrig <Sebastian.Lehrig1@ibm.com>
 implementation:
   container:
-    image: quay.io/ibm/kubeflow-component-deploy-model-with-tfserving@sha256:3728c686ddc651f21f32b68d69a93e9829bfaa7837a1d5852fd48d797796a65c
+    image: quay.io/ibm/kubeflow-component-base-image-k8s-client:latest
     command:
     - bash
     - -exc
@@ -20,159 +20,146 @@ implementation:
 
       mkdir -p "$(dirname "$output_endpoint")" 
       
-cat > tfserving-resources.yaml <<EOF
-apiVersion: v1
-data:
-  AWS_ACCESS_KEY_ID: bWluaW8=
-  AWS_SECRET_ACCESS_KEY: bWluaW8xMjM=
-kind: Secret
-metadata:
-  annotations:
-    serving.kubeflow.org/s3-endpoint: minio-service.kubeflow:9000
-    serving.kubeflow.org/s3-usehttps: "0"
-  name: minio-s3-secret
-  namespace: kubeflow
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: sa
-  namespace: kubeflow
-secrets:
-- name: minio-s3-secret
----
-apiVersion: v1
-kind: Service
-metadata:
-  labels:
-    app: ${model_name}
-  name: ${model_name}-service
-spec:
-  ports:
-  - name: grpc-tf-serving
-    port: 9000
-    targetPort: 9000
-  - name: http-tf-serving
-    port: 8500
-    targetPort: 8500
-  selector:
-    app: ${model_name}
-  type: ClusterIP
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  labels:
-    app: ${model_name}
-  name: ${model_name}-deployment
-spec:
-  selector:
-    matchLabels:
-      app: ${model_name}
-  template:
-    metadata:
-      annotations:
-        sidecar.istio.io/inject: "true"
-      labels:
-        app: ${model_name}
-        version: v1
-    spec:
-      containers:
-      - args:
-        - --port=9000
-        - --rest_api_port=8500
-        - --model_name=${model_name}
-        - --model_base_path=${s3_address}
-#        - --monitoring_config_file=/var/config/monitoring_config.txt
-        command:
-        - /usr/bin/tensorflow_model_server
-        env:
-        - name: AWS_ACCESS_KEY_ID
-          valueFrom:
-            secretKeyRef:
-              key: AWS_ACCESS_KEY_ID
-              name: minio-s3-secret
-        - name: AWS_SECRET_ACCESS_KEY
-          valueFrom:
-            secretKeyRef:
-              key: AWS_SECRET_ACCESS_KEY
-              name: minio-s3-secret
-        - name: AWS_REGION
-          value: us-west-1
-        - name: S3_USE_HTTPS
-          value: "0"
-        - name: S3_VERIFY_SSL
-          value: "0"
-        - name: S3_ENDPOINT
-          value: minio-service:9000
-        image: quay.io/ibm/kubeflow-tensorflow-serving-ppc64le:2.4.1
-        imagePullPolicy: IfNotPresent
-        livenessProbe:
-          initialDelaySeconds: 30
-          periodSeconds: 30
-          tcpSocket:
-            port: 9000
-        name: ${model_name}
+      cat <<EOF | kubectl apply -f -
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: minio-credentials
+      type: Opaque
+      data:
+        AWS_ACCESS_KEY_ID: bWluaW8=          #minio as base64
+        AWS_SECRET_ACCESS_KEY: bWluaW8xMjM=     #minio123 as base64
+      ---
+      apiVersion: v1
+      kind: Service
+      metadata:
+        labels:
+          app: ${model_name}
+        name: ${model_name}-service
+      spec:
         ports:
-        - containerPort: 9000
-        - containerPort: 8500
-        resources:
-          limits:
-            cpu: "4"
-            memory: 4Gi
-          requests:
-            cpu: "1"
-            memory: 1Gi
-        volumeMounts:
-        - mountPath: /var/config/
-          name: config-volume
-      volumes:
-      - configMap:
-          name: workflow-controller-configmap
-        name: config-volume
----
-apiVersion: networking.istio.io/v1alpha3
-kind: DestinationRule
-metadata:
-  labels:
-  name: ${model_name}-destinationrule
-spec:
-  host: ${model_name}-service
-  subsets:
-  - labels:
-      version: v1
-    name: v1
----
-apiVersion: networking.istio.io/v1alpha3
-kind: VirtualService
-metadata:
-  labels:
-  name: ${model_name}-virtualservice
-spec:
-  gateways:
-  - kubeflow-gateway
-  hosts:
-  - '*'
-  http:
-  - match:
-    - method:
-        exact: POST
-      uri:
-        prefix: /serving/models/${model_name}
-    rewrite:
-      uri: /v1/models/${model_name}:predict
-    route:
-    - destination:
+        - name: grpc-tf-serving
+          port: 9000
+          targetPort: 9000
+        - name: http-tf-serving
+          port: 8500
+          targetPort: 8500
+        selector:
+          app: ${model_name}
+        type: ClusterIP
+      ---
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        labels:
+          app: ${model_name}
+        name: ${model_name}-deployment
+      spec:
+        selector:
+          matchLabels:
+            app: ${model_name}
+        template:
+          metadata:
+            annotations:
+              sidecar.istio.io/inject: "true"
+            labels:
+              app: ${model_name}
+              version: v1
+          spec:
+            containers:
+            - args:
+              - --port=9000
+              - --rest_api_port=8500
+              - --model_name=${model_name}
+              - --model_base_path=${s3_address}
+      #        - --monitoring_config_file=/var/config/monitoring_config.txt
+              command:
+              - /usr/bin/tensorflow_model_server
+              env:
+              - name: AWS_ACCESS_KEY_ID
+                valueFrom:
+                  secretKeyRef:
+                    key: AWS_ACCESS_KEY_ID
+                    name: minio-s3-secret
+              - name: AWS_SECRET_ACCESS_KEY
+                valueFrom:
+                  secretKeyRef:
+                    key: AWS_SECRET_ACCESS_KEY
+                    name: minio-s3-secret
+              - name: AWS_REGION
+                value: us-west-1
+              - name: S3_USE_HTTPS
+                value: "0"
+              - name: S3_VERIFY_SSL
+                value: "0"
+              - name: S3_ENDPOINT
+                value: minio-service:9000
+              image: quay.io/ibm/kubeflow-tensorflow-serving-ppc64le:2.4.1
+              imagePullPolicy: IfNotPresent
+              livenessProbe:
+                initialDelaySeconds: 30
+                periodSeconds: 30
+                tcpSocket:
+                  port: 9000
+              name: ${model_name}
+              ports:
+              - containerPort: 9000
+              - containerPort: 8500
+              resources:
+                limits:
+                  cpu: "4"
+                  memory: 4Gi
+                requests:
+                  cpu: "1"
+                  memory: 1Gi
+              volumeMounts:
+              - mountPath: /var/config/
+                name: config-volume
+            volumes:
+            - configMap:
+                name: workflow-controller-configmap
+              name: config-volume
+      ---
+      apiVersion: networking.istio.io/v1alpha3
+      kind: DestinationRule
+      metadata:
+        labels:
+        name: ${model_name}-destinationrule
+      spec:
         host: ${model_name}-service
-        port:
-          number: 8500
-        subset: v1
-      weight: 100
-EOF
+        subsets:
+        - labels:
+            version: v1
+          name: v1
+      ---
+      apiVersion: networking.istio.io/v1alpha3
+      kind: VirtualService
+      metadata:
+        labels:
+        name: ${model_name}-virtualservice
+      spec:
+        gateways:
+        - kubeflow-gateway
+        hosts:
+        - '*'
+        http:
+        - match:
+          - method:
+              exact: POST
+            uri:
+              prefix: /serving/models/${model_name}
+          rewrite:
+            uri: /v1/models/${model_name}:predict
+          route:
+          - destination:
+              host: ${model_name}-service
+              port:
+                number: 8500
+              subset: v1
+            weight: 100
+      EOF
 
-      kubectl apply -f "tfserving-resources.yaml"
       echo "http://your-kubeflow-url/serving/models/${model_name}" > "$output_endpoint"
     - {inputValue: Model Name}
     - {inputValue: S3 Address}
     - {outputPath: Endpoint}
-
