@@ -49,16 +49,18 @@ implementation:
           spec:
             containers:
               - name: "${model_name}"
-                image: "quay.io/ibm/tritonserver-ppc64le:v2.13.0"
+                image: "quay.io/mgiessing/tritonserver:22.03-py3"
                 imagePullPolicy: "IfNotPresent"
 
                 resources:
                   limits:
                     nvidia.com/gpu: 0
 
-                args: ["tritonserver", "--model-store=${s3_address}", 
+                args: ["tritonserver",
+                       "--model-store=${s3_address}", 
                        "--model-control-mode=poll",
-                       "--repository-poll-secs=5"]
+                       "--repository-poll-secs=5",
+                       "--strict-model-config=false"]
 
                 env:
                 - name: AWS_ACCESS_KEY_ID
@@ -137,13 +139,13 @@ implementation:
             uri:
               prefix: /serving/models/${model_name}
           rewrite:
-            uri: /v1/models/${model_name}:predict
+            uri: /v2/models/${model_name}:predict
           route:
           - destination:
               host: ${model_name}-service
               port:
                 number: 8500
-              subset: v1
+              subset: v2
             weight: 100
       EOF
 
