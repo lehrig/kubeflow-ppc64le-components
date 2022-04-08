@@ -107,8 +107,42 @@ implementation:
           - port: 8001
             targetPort: grpc
             name: grpc-inference-server
+          - port: 8002
+            targetPort: metrics
+            name: metrics-inference-server
         selector:
           app: "${model_name}"
+      ---
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: "${model_name}-metrics"
+        labels:
+          app: "${model_name}-metrics"
+        annotations:
+          alpha.monitoring.coreos.com/non-namespaced: "true"
+      spec:
+        ports:
+        - name: metrics
+          port: 8080
+          targetPort: metrics
+          protocol: TCP
+        selector:
+          app: "${model_name}"
+      ---
+      apiVersion: monitoring.coreos.com/v1
+      kind: ServiceMonitor
+      metadata:
+        name: "${model_name}-monitor"
+        labels:
+          app: "${model_name}-monitor"
+      spec:
+        selector:
+          matchLabels:
+            app: "${model_name}-metrics"
+        endpoints:
+        - port: metrics
+          interval: 15s
       ---
       apiVersion: networking.istio.io/v1alpha3
       kind: DestinationRule
