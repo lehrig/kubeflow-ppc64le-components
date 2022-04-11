@@ -1,0 +1,137 @@
+name: Upload model
+description: Uploads a model file to MinIO artifact store.
+inputs:
+- {name: file_dir, type: String}
+- {name: minio_url, type: String}
+- {name: minio_user, type: String}
+- {name: minio_pass, type: String}
+- {name: export_bucket, type: String, default: models, optional: true}
+- {name: model_name, type: String, default: my-model, optional: true}
+- {name: model_version, type: Integer, default: '1', optional: true}
+- {name: model_format, type: String, default: onnx, optional: true}
+outputs:
+- {name: s3_address, type: String}
+- {name: triton_s3_address, type: String}
+implementation:
+  container:
+    image: quay.io/ibm/kubeflow-component-numpy-cv2:latest
+    command:
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp)
+      printf "%s" "$0" > "$program_path"
+      python3 -u "$program_path" "$@"
+    - |
+      def upload_model(
+          file_dir,
+          minio_url,
+          minio_user,
+          minio_pass,
+          export_bucket = "models",
+          model_name = "my-model",
+          model_version = 1,
+          model_format = "onnx",
+      ):
+          """Uploads a model file to MinIO artifact store."""
+
+          from collections import namedtuple
+          from minio import Minio
+
+          minio_client = Minio(minio_url,
+                               access_key=minio_user,
+                               secret_key=minio_pass,
+                               secure=False)
+
+          # Create export bucket if it does not yet exist
+          response = minio_client.list_buckets()
+          export_bucket_exists = False
+          for bucket in response:
+              if bucket.name == export_bucket:
+                  export_bucket_exists = True
+
+          if not export_bucket_exists:
+              minio_client.make_bucket(bucket_name=export_bucket)
+
+          # Save onnx file to MinIO
+          model_path = f"{model_name}/{model_version}/model.{model_format}"
+          minio_client.fput_object(
+              bucket_name=export_bucket,  # bucket name in Minio
+              object_name=f"{model_format}/{model_path}",  # file name in bucket of Minio / for Triton name MUST be model.onnx!
+              file_path=file_dir,  # file path / name in local system
+          )
+
+          s3_address = f"s3://{minio_url}:80/{export_bucket}/{model_format}"
+          triton_s3_address = f"{s3_address}/{model_path}"
+          out_tuple = namedtuple("UploadOutput", ["s3_address", "triton_s3_address"])
+          return out_tuple(s3_address, triton_s3_address)
+
+      def _serialize_str(str_value: str) -> str:
+          if not isinstance(str_value, str):
+              raise TypeError('Value "{}" has type "{}" instead of str.'.format(
+                  str(str_value), str(type(str_value))))
+          return str_value
+
+      import argparse
+      _parser = argparse.ArgumentParser(prog='Upload model', description='Uploads a model file to MinIO artifact store.')
+      _parser.add_argument("--file-dir", dest="file_dir", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--minio-url", dest="minio_url", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--minio-user", dest="minio_user", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--minio-pass", dest="minio_pass", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--export-bucket", dest="export_bucket", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--model-name", dest="model_name", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--model-version", dest="model_version", type=int, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--model-format", dest="model_format", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("----output-paths", dest="_output_paths", type=str, nargs=2)
+      _parsed_args = vars(_parser.parse_args())
+      _output_files = _parsed_args.pop("_output_paths", [])
+
+      _outputs = upload_model(**_parsed_args)
+
+      _output_serializers = [
+          _serialize_str,
+          _serialize_str,
+
+      ]
+
+      import os
+      for idx, output_file in enumerate(_output_files):
+          try:
+              os.makedirs(os.path.dirname(output_file))
+          except OSError:
+              pass
+          with open(output_file, 'w') as f:
+              f.write(_output_serializers[idx](_outputs[idx]))
+    args:
+    - --file-dir
+    - {inputPath: file_dir}
+    - --minio-url
+    - {inputValue: minio_url}
+    - --minio-user
+    - {inputValue: minio_user}
+    - --minio-pass
+    - {inputValue: minio_pass}
+    - if:
+        cond: {isPresent: export_bucket}
+        then:
+        - --export-bucket
+        - {inputValue: export_bucket}
+    - if:
+        cond: {isPresent: model_name}
+        then:
+        - --model-name
+        - {inputValue: model_name}
+    - if:
+        cond: {isPresent: model_version}
+        then:
+        - --model-version
+        - {inputValue: model_version}
+    - if:
+        cond: {isPresent: model_format}
+        then:
+        - --model-format
+        - {inputValue: model_format}
+    - '----output-paths'
+    - {outputPath: s3_address}
+    - {outputPath: triton_s3_address}
+
