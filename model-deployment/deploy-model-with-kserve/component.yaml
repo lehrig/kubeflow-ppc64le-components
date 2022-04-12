@@ -1,0 +1,70 @@
+name: Deploy Model with KServe
+inputs:
+- {name: Model Name, type: String, default: 'my-model', description: 'Name of the model. Must be unique for the targeted namespace and conform Kubernetes naming conventions. Example: my-model.'}
+- {name: S3 Address, type: String, description: 'S3-address where the model resides (typically in MinIO). Note that you have to point to the model root path, not a concrete version. Example: s3://minio-service-kubeflow.apps:80/my-model-repository/my-model.'}
+outputs:
+- {name: Endpoint, type: String, description: 'REST endpoint where the model can be queried. Example: http://my-model-service-kubeflow.apps/v1/models/my-model:predict.'}
+metadata:
+  annotations:
+    author: Sebastian Lehrig <Sebastian.Lehrig1@ibm.com>
+implementation:
+  container:
+    image: quay.io/ibm/kubeflow-component-base-image-k8s-client:latest
+    command:
+    - bash
+    - -exc
+    - |
+      model_name=$0
+      s3_address=$1
+      output_endpoint=$2
+
+      mkdir -p "$(dirname "$output_endpoint")"
+
+      cat <<EOF | kubectl apply -f -
+      apiVersion: "serving.kserve.io/v1beta1"
+      kind: "InferenceService"
+      metadata:
+        name: "${model_name}"
+        annotations:
+          sidecar.istio.io/inject: "false"
+      spec:
+        predictor:
+          serviceAccountName: kserve-inference-sa
+          triton:
+            runtimeVersion: 22.03-py3
+            args: [ "--strict-model-config=false"]
+            resources:
+              limits:
+                cpu: "1"
+                memory: 8Gi
+              requests:
+                cpu: "1"
+                memory: 8Gi
+            storageUri: "${s3_address}"
+      ---
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: kserve-minio-credentials
+        annotations:
+          serving.kserve.io/s3-endpoint: "minio-service.kubeflow:9000" # replace with your s3 endpoint e.g minio-service.kubeflow:9000
+          serving.kserve.io/s3-usehttps: "0" # by default 1, if testing with minio you can set to 0
+          serving.kserve.io/s3-region: "us-west-1"
+          serving.kserve.io/s3-useanoncredential: "false" # omitting this is the same as false, if true will ignore provided credential and use anonymous credentials
+      type: Opaque
+      data:
+        AWS_ACCESS_KEY_ID: bWluaW8=          #minio as base64
+        AWS_SECRET_ACCESS_KEY: bWluaW8xMjM=     #minio123 as base64
+      ---
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: kserve-inference-sa
+      secrets:
+      - name: kserve-minio-credentials
+      EOF
+
+      echo "http://your-kubeflow-url/serving/models/${model_name}" > "$output_endpoint"
+    - {inputValue: Model Name}
+    - {inputValue: S3 Address}
+    - {outputPath: Endpoint}
