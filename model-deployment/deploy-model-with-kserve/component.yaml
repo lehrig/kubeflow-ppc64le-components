@@ -1,9 +1,9 @@
 name: Deploy Model with KServe
 inputs:
 - {name: Model Name, type: String, default: 'my-model', description: 'Name of the model. Must be unique for the targeted namespace and conform Kubernetes naming conventions. Example: my-model.'}
-- {name: Storage URI, type: String, default: 's3://models/onnx', description: 'KServe's Storage URI where the model resides (typically in MinIO). Note that you have to point to the model root path, not a concrete version. Example: s3://models/onnx.'}
+- {name: Storage URI, type: String, default: 's3://models/onnx', description: 'The Storage URI of KServe where the model resides (typically in MinIO). Note that you have to point to the model root path, not a concrete version. Example: s3://models/onnx.'}
 outputs:
-- {name: Endpoint, type: String, description: 'REST endpoint where the model can be queried. Example: http://my-model-service-kubeflow.apps/v1/models/my-model:predict.'}
+- {name: Endpoint, type: String, description: 'REST endpoint where the model can be queried. Example: https://my-model-user-example-com.apps.myorg.com.'}
 metadata:
   annotations:
     author: Sebastian Lehrig <Sebastian.Lehrig1@ibm.com>
