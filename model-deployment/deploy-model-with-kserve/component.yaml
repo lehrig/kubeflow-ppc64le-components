@@ -1,7 +1,7 @@
 name: Deploy Model with KServe
 inputs:
 - {name: Model Name, type: String, default: 'my-model', description: 'Name of the model. Must be unique for the targeted namespace and conform Kubernetes naming conventions. Example: my-model.'}
-- {name: S3 Address, type: String, description: 'S3-address where the model resides (typically in MinIO). Note that you have to point to the model root path, not a concrete version. Example: s3://minio-service-kubeflow.apps:80/my-model-repository/my-model.'}
+- {name: Storage URI, type: String, default: 's3://models/onnx', description: 'KServe's Storage URI where the model resides (typically in MinIO). Note that you have to point to the model root path, not a concrete version. Example: s3://models/onnx.'}
 outputs:
 - {name: Endpoint, type: String, description: 'REST endpoint where the model can be queried. Example: http://my-model-service-kubeflow.apps/v1/models/my-model:predict.'}
 metadata:
@@ -15,7 +15,7 @@ implementation:
     - -exc
     - |
       model_name=$0
-      s3_address=$1
+      storage_uri=$1
       output_endpoint=$2
 
       mkdir -p "$(dirname "$output_endpoint")"
@@ -40,7 +40,7 @@ implementation:
               requests:
                 cpu: "1"
                 memory: 8Gi
-            storageUri: "${s3_address}"
+            storageUri: "${storage_uri}"
       ---
       apiVersion: v1
       kind: Secret
@@ -64,7 +64,9 @@ implementation:
       - name: kserve-minio-credentials
       EOF
 
-      echo "http://your-kubeflow-url/serving/models/${model_name}" > "$output_endpoint"
+      kubectl wait --for=condition=ready --timeout=600s inferenceservice/${model_name}
+      
+      kubectl get inferenceservice/monkey-classification -o json | jq '.status.components.predictor.url' > "$output_endpoint"
     - {inputValue: Model Name}
-    - {inputValue: S3 Address}
+    - {inputValue: Storage URI}
     - {outputPath: Endpoint}
