@@ -64,7 +64,7 @@ implementation:
               minio_client.make_bucket(bucket_name=export_bucket)
 
           model_path = f"{model_name}/{model_version}/model.{model_format}"
-          s3_address = f"s3://{minio_url}:80/{export_bucket}/{model_format}"
+          s3_address = f"s3://{minio_url}/{export_bucket}/{model_format}"
           triton_s3_address = f"{s3_address}/{model_path}"
 
           logging.info(f"Saving onnx file to MinIO (s3 address: {s3_address})...")
