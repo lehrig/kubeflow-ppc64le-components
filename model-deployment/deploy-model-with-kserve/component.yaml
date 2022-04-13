@@ -52,7 +52,7 @@ implementation:
           serving.kserve.io/s3-region: "us-west-1"
           serving.kserve.io/s3-useanoncredential: "false" # omitting this is the same as false, if true will ignore provided credential and use anonymous credentials
       type: Opaque
-      stringData: # use `stringData` for raw credential string or `data` for base64 encoded string
+      stringData: # use stringData for raw credential string or data for base64 encoded string
         AWS_ACCESS_KEY_ID: minio
         AWS_SECRET_ACCESS_KEY: minio123
       ---
