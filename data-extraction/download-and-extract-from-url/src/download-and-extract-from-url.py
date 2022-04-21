@@ -16,7 +16,7 @@ def get_arg_parser():
                         help='Name of the file to be stored.')
     parser.add_argument('--dataPath', type=str,
                         default="data",
-                        help='Name of the folder that data is extrated to.')
+                        help='Name of the folder that data is extracted to.')
 
     return parser
 
