@@ -1,9 +1,9 @@
 name: Convert model to onnx
 description: 'Converts a model to ONNX format. Supported input formats: Keras.'
 inputs:
-- {name: model, type: InputPath}
+- {name: model, type: String}
 outputs:
-- {name: onnx_model, type: OutputPath}
+- {name: onnx_model, type: String}
 implementation:
   container:
     image: quay.io/ibm/kubeflow-component-tensorflow-cpu:latest
