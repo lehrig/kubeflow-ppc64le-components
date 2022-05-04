@@ -78,6 +78,7 @@ implementation:
       EOF
 
       echo "Waiting for job to start..."
+      sleep 30
       kubectl wait --for=condition=initialized --timeout=600s pod/${job_name}-driver
       kubectl wait --for=condition=podscheduled --timeout=600s pod/${job_name}-driver
 
