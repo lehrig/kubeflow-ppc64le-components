@@ -1,0 +1,96 @@
+name: Run Spark Job
+inputs:
+- {name: Name, type: String, default: 'my-spark-job', description: 'Base name of this Spark job. The actual job name will constist of this base name, prefixed by a time-based epoch value (for getting a unique name). Example: my-spark-job.'}
+- {name: Application File, type: String, default: 'local:///opt/spark/examples/jars/spark-examples_2.12-3.0.1.jar', description: 'The Spark application to run as a job. Must already be existing at the specified location. Example: local:///opt/spark/examples/jars/spark-examples_2.12-3.0.1.jar.'}
+- {name: Main Class, type: String, default: 'org.apache.spark.examples.SparkPi', description: 'Main Scala/Java class of the Spark job as available within the application file. Example: org.apache.spark.examples.SparkPi.'}
+- {name: Requested Storage, type: String, default: '1Gi', description: 'Amount of storage requested for this Spark job. Results in an according persistent volume claim. Example: 1Gi.'}
+- {name: Spark Version, type: String, default: '3.0.1', description: 'Spark version to be used. Example: 3.0.1.'}
+outputs:
+- {name: Results, type: String, description: 'Result outputs of the Spark job. Example: Pi is roughly 3.14121570607853.'}
+metadata:
+  annotations:
+    author: Sebastian Lehrig <Sebastian.Lehrig1@ibm.com>
+implementation:
+  container:
+    image: quay.io/ibm/kubeflow-component-base-image-k8s-client:latest
+    command:
+    - bash
+    - -exc
+    - |
+      name=$0
+      application_file=$1
+      main_class=$2
+      requested_storage=$3
+      spark_version=$4
+      output_results=$5
+
+      epoch=$(date +%s)
+      job_name=$name-$epoch
+      mkdir -p "$(dirname "$output_results")"
+
+      echo "Staring Spark application '${job_name}'"
+
+      cat <<EOF | kubectl apply -f -
+      apiVersion: "sparkoperator.k8s.io/v1beta2"
+      kind: SparkApplication
+      metadata:
+        name: ${job_name}
+      spec:
+        type: Scala
+        mode: cluster
+        image: "quay.io/ibm/odh-spark-ppc64le:s${spark_version}-h3.3.2_v1.0.0"
+        mainClass: ${main_class}
+        mainApplicationFile: "${application_file}"
+        sparkVersion: "${spark_version}"
+        restartPolicy:
+          type: Never
+        volumes:
+          - name: "${job_name}-volume"
+            persistentVolumeClaim:
+              claimName: ${job_name}-pvc
+        driver:
+          annotations:
+            sidecar.istio.io/inject: "false"
+          cores: 1
+          serviceAccount: spark
+          volumeMounts:
+            - name: "${job_name}-volume"
+              mountPath: "/tmp"
+        executor:
+          annotations:
+            sidecar.istio.io/inject: "false"
+          cores: 1
+          instances: 1
+          volumeMounts:
+            - name: "${job_name}-volume"
+              mountPath: "/tmp"
+      ---
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: ${job_name}-pvc
+      spec:
+        accessModes:
+        - ReadWriteOnce
+        resources:
+          requests:
+            storage: ${requested_storage}
+      EOF
+
+      echo "Waiting for job to start..."
+      kubectl wait --for=condition=initialized --timeout=600s pod/${job_name}-driver
+      kubectl wait --for=condition=podscheduled --timeout=600s pod/${job_name}-driver
+
+      echo "Job started. Waiting for completion..."
+      kubectl wait --for=condition=ready=false --timeout=-1s pod/${job_name}-driver
+ 
+      echo "Job finished. Exporting results..."
+      kubectl logs ${job_name}-driver > "$output_results"
+
+      echo "Finished."
+    - {inputValue: Name}
+    - {inputValue: Application File}
+    - {inputValue: Main Class}
+    - {inputValue: Requested Storage}
+    - {inputValue: Spark Version}
+    - {outputPath: Results}
