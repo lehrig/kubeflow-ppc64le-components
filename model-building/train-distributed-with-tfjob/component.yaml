@@ -1,0 +1,119 @@
+name: Train Distributed with TFJob
+inputs:
+- {name: Model Name, type: String, default: 'my-model', description: 'Name of the model. Must be unique for the targeted namespace and conform Kubernetes naming conventions. Example: my-model.'}
+- {name: Image, type: String, default: 'quay.io/ibm/kubeflow-notebook-image-ppc64le:elyra3.9.0-py3.8-tensorflow-gpu2.8.0', description: 'Base image for model training. Example: quay.io/ibm/kubeflow-notebook-image-ppc64le:elyra3.9.0-py3.8-tensorflow-gpu2.8.0.'}
+- {name: Command, type: JsonArray, description: 'Training commands to be executed within the given image. Example: [python3, -c, "import sys; print(\"Hello World\")"].'}
+- {name: Args, type: JsonArray, description: 'Training arguments passed to the given command. Example: ["--verbose", "true"].'}
+- {name: Namespace, type: String, default: 'user-example-com', description: 'The namespace where the TFJob and associated volumes will be created. Example: user-example-com.'}
+- {name: Number of Workers, type: Integer, default: '2', description: 'Number of worker replicas for the TFJob. Example: 2.'}
+- {name: PVC Size, type: String, default: '10Gi', description: 'Size of the storage during model training. Storage is mounted into to the TFJob based on a persitent volume claim of the given size. Example: 10Gi.'}
+outputs:
+- {name: Results, type: String, description: 'Result outputs of the TFJob. Example: ...TFJob finished successfully.'}
+metadata:
+  annotations:
+    author: Sebastian Lehrig <Sebastian.Lehrig1@ibm.com>
+implementation:
+  container:
+    image: quay.io/ibm/kubeflow-component-base-image-k8s-client:latest
+    command:
+    - bash
+    - -exc
+    - |
+      model_name=$0
+      image=$1
+      command=$2
+      args=$3
+      namespace=$4
+      number_of_workers=$5
+      pvc_size=$6
+      output_results=$7
+
+      epoch=$(date +%s)
+      job_name=tfjob-$model_name-$epoch
+      mkdir -p "$(dirname "$output_results")"
+
+      echo "Starting TFJob application '${job_name}'"
+
+      cat <<EOF | kubectl apply -f -
+      apiVersion: kubeflow.org/v1
+      kind: TFJob
+      metadata:
+        name: ${job_name}
+        namespace: ${namespace}
+      spec:
+        runPolicy:
+          cleanPodPolicy: None
+        tfReplicaSpecs:
+          Worker:
+            replicas: ${number_of_workers}
+            restartPolicy: OnFailure
+            template:
+              metadata:
+                annotations:
+                  sidecar.istio.io/inject: "false"
+              spec:
+                nodeSelector:
+                  nvidia.com/gpu.product: "Tesla-V100-SXM2-32GB"
+                containers:
+                  - name: tensorflow
+                    image: ${image}
+                    command: ${command}
+                    args: ${args}
+                    volumeMounts:
+                      - mountPath: /train
+                        name: training
+                    resources:
+                      requests:
+                        cpu: "1000m"
+                      limits:
+                        nvidia.com/gpu: 1
+                        cpu: "4000m"
+                volumes:
+                  - name: training
+                    persistentVolumeClaim:
+                      claimName: ${job_name}-pvc
+      ---
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: ${job_name}-pvc
+        labels:
+          app: strategy-volume
+      spec:
+        accessModes:
+        - ReadWriteMany
+        resources:
+          requests:
+            storage: 10Gi
+      EOF
+
+      echo "Waiting for TFJob to be created..."
+      kubectl wait -n ${namespace} --for=condition=Created --timeout=600s tfjob/${job_name}
+
+      echo "Waiting for TFJob to run..."
+      kubectl wait -n ${namespace} --for=condition=Running --timeout=600s tfjob/${job_name}
+
+      echo "Waiting for TFJob to succeed..."
+      kubectl wait -n ${namespace} --for=condition=Running=false --timeout=-1s tfjob/${job_name}
+
+      echo "TFJob finished. Exporting results..."
+      for ((i=0; i<number_of_workers; i++)); do
+        echo "===================================================================" >> "$output_results"
+        echo "== Logs of TFJob pod ${job_name}-worker-${i}" >> "$output_results"
+        echo "===================================================================" >> "$output_results"
+        kubectl logs -n ${namespace} ${job_name}-worker-${i} >> "$output_results"
+        echo "" >> "$output_results"
+      done
+
+      echo "Deleting TFJob resources..."
+      kubectl delete TFJob -n ${namespace} ${job_name}
+
+      echo "Finished."
+    - {inputValue: Model Name}
+    - {inputValue: Image}
+    - {inputValue: Command}
+    - {inputValue: Args}
+    - {inputValue: Namespace}
+    - {inputValue: Number of Workers}
+    - {inputValue: PVC Size}
+    - {outputPath: Results}
