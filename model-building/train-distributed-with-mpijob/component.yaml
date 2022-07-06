@@ -2,10 +2,16 @@ name: Train Distributed with MPIJob
 inputs:
 - {name: Model Name, type: String, default: 'my-model', description: 'Name of the model. Must be unique for the targeted namespace and conform Kubernetes naming conventions. Example: my-model.'}
 - {name: Image, type: String, default: 'quay.io/ibm/kubeflow-notebook-image-ppc64le:elyra3.9.0-py3.8-tensorflow-gpu2.8.0', description: 'Base image for model training. Example: quay.io/ibm/kubeflow-notebook-image-ppc64le:elyra3.9.0-py3.8-tensorflow-gpu2.8.0.'}
-- {name: Args, type: JsonArray, description: 'MPI arguments passed to the given command. Example: ["--allow-run-as-root"].'}
+- {name: Train Command, type: JsonArray, description: 'MPI-enabled training command. Example: "./train.py".'}
 - {name: Namespace, type: String, default: 'user-example-com', description: 'The namespace where the MPIJob and associated volumes will be created. Example: user-example-com.'}
-- {name: Number of Workers, type: Integer, default: '2', description: 'Number of worker replicas for the MPIJob. Example: 2.'}
+- {name: Number of Workers, type: Integer, default: '1', description: 'Number of worker replicas for the MPIJob. Example: 2.'}
+- {name: Number of GPUs, type: Integer, default: '0', description: 'Number of GPUs per worker. Example: 2.'}
+- {name: Node Selector, type: String, default: '', description: 'Optional node selector for worker nodes. Example: nvidia.com/gpu.product: "Tesla-V100-SXM2-32GB".'}
 - {name: PVC Size, type: String, default: '10Gi', description: 'Size of the storage during model training. Storage is mounted into to the MPIJob based on a persitent volume claim of the given size. Example: 10Gi.'}
+- {name: Worker CPUs, type: String, default: '8', description: 'CPU limit for worker nodes. Example: "1000m".'}
+- {name: Worker Memory, type: String, default: '32Gi', description: 'Memory limit for worker nodes. Example: "1Gi".'}
+- {name: Launcher CPUs, type: String, default: '2', description: 'CPU limit for the launcher node. Example: "1000m".'}
+- {name: Launcher Memory, type: String, default: '8Gi', description: 'Memory limit for the launcher node. Example: "1Gi".'}
 outputs:
 - {name: Results, type: String, description: 'Result outputs of the MPIJob. Example: ...MPIJob finished successfully.'}
 metadata:
@@ -18,17 +24,35 @@ implementation:
     - bash
     - -exc
     - |
-      model_name=$0
-      image=$1
-      args=$2
-      namespace=$3
-      number_of_workers=$4
-      pvc_size=$5
-      output_results=$6
-
+      model_name=${0}
+      image=${1}
+      train_command=${2}
+      namespace=${3}
+      number_of_workers=${4}
+      number_of_gpus=${5}
+      node_selector=${6}
+      pvc_size=${7}
+      worker_cpus=${8}
+      worker_memory=${9}
+      launcher_cpus=${10}
+      launcher_memory=${11}
+      output_results=${12}
+      
+      if [ "${number_of_gpus}" -lt "1" ]
+      then
+        slots_per_worker=1
+      else
+        slots_per_worker=$number_of_gpus
+      fi
+      number_of_processes=$(($number_of_workers*$slots_per_worker))
       epoch=$(date +%s)
       job_name=mpijob-$model_name-$epoch
       mkdir -p "$(dirname "$output_results")"
+      if [ -n "${node_selector}" ]
+      then
+        node_selector="nodeSelector:
+                  ${node_selector}"
+      fi
 
       echo "Starting MPIJob application '${job_name}'"
 
@@ -39,7 +63,7 @@ implementation:
         name: ${job_name}
         namespace: ${namespace}
       spec:
-        slotsPerWorker: 1
+        slotsPerWorker: ${slots_per_worker}
         runPolicy:
           cleanPodPolicy: Running
         mpiReplicaSpecs:
@@ -55,11 +79,28 @@ implementation:
                   name: mpi-launcher
                   command:
                   - mpirun
-                  args: ${args}
+                  - -np
+                  - "${number_of_processes}"
+                  - --allow-run-as-root
+                  - -bind-to
+                  - none
+                  - -map-by
+                  - slot
+                  - --prefix
+                  - /opt/conda
+                  - -mca
+                  - pml
+                  - ob1
+                  - -mca
+                  - btl
+                  - ^openib
+                  - -x
+                  - NCCL_DEBUG=INFO
+                  args: ${train_command}
                   resources:
                     limits:
-                      cpu: 1
-                      memory: 2Gi
+                      cpu: ${launcher_cpus}
+                      memory: ${launcher_memory}
           Worker:
             replicas: ${number_of_workers}
             template:
@@ -67,8 +108,7 @@ implementation:
                 annotations:
                   sidecar.istio.io/inject: "false"
               spec:
-                nodeSelector:
-                  nvidia.com/gpu.product: "Tesla-V100-SXM2-32GB"
+                ${node_selector}
                 containers:
                 - image: ${image}
                   name: mpi-worker
@@ -77,9 +117,9 @@ implementation:
                       name: training
                   resources:
                     limits:
-                      cpu: 2
-                      memory: 4Gi
-                      nvidia.com/gpu: 1
+                      cpu: ${worker_cpus}
+                      memory: ${worker_memory}
+                      nvidia.com/gpu: ${number_of_gpus}
                 volumes:
                   - name: training
                     persistentVolumeClaim:
@@ -109,13 +149,13 @@ implementation:
       kubectl wait -n ${namespace} --for=condition=Running=false --timeout=-1s mpijob/${job_name}
 
       echo "MPIJob finished. Exporting results..."
-      for ((i=0; i<number_of_workers; i++)); do
-        echo "===================================================================" >> "$output_results"
-        echo "== Logs of MPIJob pod ${job_name}-worker-${i}" >> "$output_results"
-        echo "===================================================================" >> "$output_results"
-        kubectl logs -n ${namespace} ${job_name}-worker-${i} >> "$output_results"
-        echo "" >> "$output_results"
-      done
+      
+      echo "===================================================================" >> "$output_results"
+      echo "== Logs of MPIJob pod ${job_name}-launcher" >> "$output_results"
+      echo "== (also gathers logs of all ${number_of_workers} workers)" >> "$output_results"
+      echo "===================================================================" >> "$output_results"
+      kubectl logs -n ${namespace} ${job_name}-launcher >> "$output_results"
+      echo "" >> "$output_results"
 
       echo "Deleting MPIJob resources..."
       kubectl delete MPIJob -n ${namespace} ${job_name}
@@ -123,8 +163,14 @@ implementation:
       echo "Finished."
     - {inputValue: Model Name}
     - {inputValue: Image}
-    - {inputValue: Args}
+    - {inputValue: Train Command}
     - {inputValue: Namespace}
     - {inputValue: Number of Workers}
+    - {inputValue: Number of GPUs}
+    - {inputValue: Node Selector}
     - {inputValue: PVC Size}
+    - {inputValue: Worker CPUs}
+    - {inputValue: Worker Memory}
+    - {inputValue: Launcher CPUs}
+    - {inputValue: Launcher Memory}
     - {outputPath: Results}
