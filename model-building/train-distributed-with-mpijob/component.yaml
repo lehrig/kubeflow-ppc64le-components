@@ -136,7 +136,7 @@ implementation:
         - ReadWriteMany
         resources:
           requests:
-            storage: 10Gi
+            storage: ${pvc_size}
       EOF
 
       echo "Waiting for MPIJob to be created..."
