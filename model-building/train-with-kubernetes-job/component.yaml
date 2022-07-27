@@ -1,0 +1,115 @@
+name: Train with Kubernetes Job
+inputs:
+- {name: Model Name, type: String, default: 'my-model', description: 'Name of the model. Must be unique for the targeted namespace and conform Kubernetes naming conventions. Example: my-model.'}
+- {name: Image, type: String, default: 'quay.io/ibm/kubeflow-notebook-image-ppc64le:elyra3.9.0-py3.8-tensorflow-gpu2.8.0', description: 'Base image for model training. Example: quay.io/ibm/kubeflow-notebook-image-ppc64le:elyra3.9.0-py3.8-tensorflow-gpu2.8.0.'}
+- {name: Train Command, type: JsonArray, description: 'Training command. Example: "./train.py".'}
+- {name: Namespace, type: String, default: 'user-example-com', description: 'The namespace where the Job and associated volumes will be created. Example: user-example-com.'}
+- {name: Node Selector, type: String, default: '', description: 'Optional node selector for worker nodes. Example: nvidia.com/gpu.product: "Tesla-V100-SXM2-32GB".'}
+- {name: PVC Size, type: String, default: '10Gi', description: 'Size of the storage during model training. Storage is mounted into to the Job based on a persitent volume claim of the given size. Example: 10Gi.'}
+- {name: CPUs, type: String, default: '8', description: 'CPU limit for the job. Example: "1000m".'}
+- {name: GPUs, type: Integer, default: '0', description: 'Number of GPUs for the job. Example: 2.'}
+- {name: Memory, type: String, default: '32Gi', description: 'Memory limit for the job. Example: "1Gi".'}
+outputs:
+- {name: Results, type: String, description: 'Result outputs of the Job. Example: ...Job finished successfully.'}
+metadata:
+  annotations:
+    author: Sebastian Lehrig <Sebastian.Lehrig1@ibm.com>
+implementation:
+  container:
+    image: quay.io/ibm/kubeflow-component-base-image-k8s-client:latest
+    command:
+    - bash
+    - -exc
+    - |
+      model_name=${0}
+      image=${1}
+      train_command=${2}
+      namespace=${3}
+      node_selector=${4}
+      pvc_size=${5}
+      cpus=${6}
+      gpus=${7}
+      memory=${8}
+      output_results=${9}
+
+      epoch=$(date +%s)
+      job_name=job-$model_name-$epoch
+      mkdir -p "$(dirname "$output_results")"
+      if [ -n "${node_selector}" ]
+      then
+        node_selector="nodeSelector:
+              ${node_selector}"
+      fi
+
+      echo "Starting Job application '${job_name}'"
+
+      cat <<EOF | kubectl apply -f -
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: ${job_name}
+        namespace: ${namespace}
+      spec:
+        template:
+          metadata:
+            annotations:
+              sidecar.istio.io/inject: "false"
+          spec:
+            ${node_selector}
+            containers:
+              - name: training-container
+                image: ${image}
+                command: ${train_command}
+                volumeMounts:
+                  - mountPath: /train
+                    name: training
+                resources:
+                  limits:
+                    cpu: ${cpus}
+                    memory: ${memory}
+                    nvidia.com/gpu: ${gpus}
+            volumes:
+              - name: training
+                persistentVolumeClaim:
+                  claimName: ${job_name}-pvc
+            restartPolicy: Never
+      ---
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: ${job_name}-pvc
+        labels:
+          app: strategy-volume
+      spec:
+        accessModes:
+        - ReadWriteMany
+        resources:
+          requests:
+            storage: ${pvc_size}
+      EOF
+
+      echo "Waiting for Job to succeed..."
+      kubectl wait -n ${namespace} --for=condition=complete --timeout=-1s job/${job_name}
+
+      echo "Job finished. Exporting results..."
+      
+      echo "===================================================================" >> "$output_results"
+      echo "== Logs of Job pod ${job_name}" >> "$output_results"
+      echo "===================================================================" >> "$output_results"
+      kubectl logs -n ${namespace} job/${job_name} >> "$output_results"
+      echo "" >> "$output_results"
+
+      echo "Deleting Job resources..."
+      kubectl delete Job -n ${namespace} ${job_name}
+
+      echo "Finished."
+    - {inputValue: Model Name}
+    - {inputValue: Image}
+    - {inputValue: Train Command}
+    - {inputValue: Namespace}
+    - {inputValue: Node Selector}
+    - {inputValue: PVC Size}
+    - {inputValue: CPUs}
+    - {inputValue: GPUs}
+    - {inputValue: Memory}
+    - {outputPath: Results}
