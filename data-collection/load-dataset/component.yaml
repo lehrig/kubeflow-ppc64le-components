@@ -1,0 +1,156 @@
+name: Load dataset
+description: Load a Huggingface Dataset.
+inputs:
+- {name: path, type: String, description: 'Path from which to load the dataset. Huggingfaces
+    hub for datasets is supported. Example: "Lehrig/Monkey-Species-Collection".'}
+- {name: configuration, type: String, description: 'Name of the dataset configuration
+    to load. Example: "downsized".', default: '', optional: true}
+- {name: label_column, type: String, description: 'Optional name of a label column
+    to be fetched as optional, additional output. Example: "label".', default: '',
+  optional: true}
+outputs:
+- {name: dataset_dir, type: String}
+- {name: labels, type: 'typing.List[str]'}
+implementation:
+  container:
+    image: quay.io/ibm/kubeflow-notebook-image-ppc64le:elyra3.10.1-py3.8-tensorflow-gpu2.8.0-v0
+    command:
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp)
+      printf "%s" "$0" > "$program_path"
+      python3 -u "$program_path" "$@"
+    - |
+      def _make_parent_dirs_and_return_path(file_path: str):
+          import os
+          os.makedirs(os.path.dirname(file_path), exist_ok=True)
+          return file_path
+
+      def load_dataset(
+          path,
+          dataset_dir,
+          configuration = "",
+          label_column = ""
+      ):
+          '''
+          Load a Huggingface Dataset.
+
+                  Parameters:
+                          path: Path from which to load the dataset. Huggingfaces hub for datasets is supported. Example: "Lehrig/Monkey-Species-Collection".
+                          configuration: Name of the dataset configuration to load. Example: "downsized".
+                          label_column: Optional name of a label column to be fetched as optional, additional output. Example: "label".
+
+                  Returns:
+                          dataset_dir: Path where dataset will be loaded to.
+                          labels: List of labels, if available. Empty list otherwise. Example: ["cat", "dog"]
+          '''
+
+          from collections import namedtuple
+          from datasets import load_dataset
+          from datasets.dataset_dict import DatasetDict
+          import logging
+          import os
+          from PIL.Image import Image
+          import sys
+
+          logging.basicConfig(
+              stream=sys.stdout,
+              level=logging.INFO,
+              format='%(levelname)s %(asctime)s: %(message)s'
+          )
+
+          if not configuration:
+              configuration = None
+          logging.info(f"Loading dataset from '{path}' using configuration '{configuration}'...")
+          dataset = load_dataset(path, configuration)
+
+          logging.info(f"Reading image files into bytes...")
+          # see: https://huggingface.co/docs/datasets/v2.4.0/en/package_reference/main_classes#datasets.Dataset.save_to_disk
+          def read_image_file(example):
+              for column in example:
+                  if isinstance(example[column], Image):
+                      with open(example[column].filename, "rb") as f:
+                          example[column] = {"bytes": f.read()}
+              return example
+          dataset = dataset.map(read_image_file)
+
+          logging.info(f"Saving dataset to '{dataset_dir}'...")
+          if not os.path.exists(dataset_dir):
+              os.makedirs(dataset_dir)
+          dataset.save_to_disk(dataset_dir)
+
+          logging.info(f"Dataset saved. Contents of '{dataset_dir}':")
+          logging.info(os.listdir(dataset_dir))
+
+          labels = []
+          if label_column:
+              logging.info(f"Fetching labels from column '{label_column}'...")
+              if isinstance(dataset, DatasetDict):
+                  dataset = next(iter(dataset.values()))
+              labels = dataset.features[label_column].names
+          output = namedtuple(
+                  'GetDatasetMetadataOutput',
+                  ['labels']
+              )
+
+          logging.info("Finished.")
+          return output(labels)
+
+      def _serialize_json(obj) -> str:
+          if isinstance(obj, str):
+              return obj
+          import json
+
+          def default_serializer(obj):
+              if hasattr(obj, 'to_struct'):
+                  return obj.to_struct()
+              else:
+                  raise TypeError(
+                      "Object of type '%s' is not JSON serializable and does not have .to_struct() method."
+                      % obj.__class__.__name__)
+
+          return json.dumps(obj, default=default_serializer, sort_keys=True)
+
+      import argparse
+      _parser = argparse.ArgumentParser(prog='Load dataset', description='Load a Huggingface Dataset.')
+      _parser.add_argument("--path", dest="path", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--configuration", dest="configuration", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--label-column", dest="label_column", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--dataset-dir", dest="dataset_dir", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("----output-paths", dest="_output_paths", type=str, nargs=1)
+      _parsed_args = vars(_parser.parse_args())
+      _output_files = _parsed_args.pop("_output_paths", [])
+
+      _outputs = load_dataset(**_parsed_args)
+
+      _output_serializers = [
+          _serialize_json,
+
+      ]
+
+      import os
+      for idx, output_file in enumerate(_output_files):
+          try:
+              os.makedirs(os.path.dirname(output_file))
+          except OSError:
+              pass
+          with open(output_file, 'w') as f:
+              f.write(_output_serializers[idx](_outputs[idx]))
+    args:
+    - --path
+    - {inputValue: path}
+    - if:
+        cond: {isPresent: configuration}
+        then:
+        - --configuration
+        - {inputValue: configuration}
+    - if:
+        cond: {isPresent: label_column}
+        then:
+        - --label-column
+        - {inputValue: label_column}
+    - --dataset-dir
+    - {outputPath: dataset_dir}
+    - '----output-paths'
+    - {outputPath: labels}
