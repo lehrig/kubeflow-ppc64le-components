@@ -14,7 +14,7 @@ outputs:
 - {name: triton_s3_address, type: String}
 implementation:
   container:
-    image: quay.io/ibm/kubeflow-component-numpy-cv2:latest
+    image: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest
     command:
     - sh
     - -ec
@@ -116,7 +116,7 @@ implementation:
               f.write(_output_serializers[idx](_outputs[idx]))
     args:
     - --file-dir
-    - {inputPath: file_dir}
+    - {inputValue: file_dir}
     - --minio-url
     - {inputValue: minio_url}
     - --minio-user

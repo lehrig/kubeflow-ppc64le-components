@@ -1,12 +1,13 @@
 name: Convert model to onnx
 description: 'Converts a model to ONNX format. Supported input formats: Keras.'
 inputs:
-- {name: model, type: String}
+- {name: model_dir, type: String}
+- {name: onnx_model_dir, type: String, default: /blackboard/onnx, optional: true}
 outputs:
-- {name: onnx_model, type: String}
+- {name: onnx_model_dir, type: String}
 implementation:
   container:
-    image: quay.io/ibm/kubeflow-component-tensorflow-cpu:latest
+    image: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest
     command:
     - sh
     - -ec
@@ -15,22 +16,18 @@ implementation:
       printf "%s" "$0" > "$program_path"
       python3 -u "$program_path" "$@"
     - |
-      def _make_parent_dirs_and_return_path(file_path: str):
-          import os
-          os.makedirs(os.path.dirname(file_path), exist_ok=True)
-          return file_path
-
       def convert_model_to_onnx(
-          model,
-          onnx_model
+          model_dir,
+          onnx_model_dir = "/blackboard/onnx"
       ):
           """Converts a model to ONNX format. Supported input formats: Keras."""
 
+          from collections import namedtuple
+          import logging
           import onnx
           import sys
           import tensorflow as tf
           import tf2onnx
-          import logging
 
           logging.basicConfig(
               stream=sys.stdout,
@@ -38,27 +35,59 @@ implementation:
               format='%(levelname)s %(asctime)s: %(message)s'
           )
 
-          logging.info(f"Loading model from '{model}'...")
-          keras_model = tf.keras.models.load_model(model)
+          logging.info(f"Loading model from '{model_dir}'...")
+          keras_model = tf.keras.models.load_model(model_dir)
 
           logging.info("Converting model to ONNX...")
           converted_model, _ = tf2onnx.convert.from_keras(keras_model)
 
-          logging.info(f"Saving ONNX model to '{onnx_model}'...")
-          onnx.save_model(converted_model, onnx_model)
+          logging.info(f"Saving ONNX model to '{onnx_model_dir}'...")
+          onnx.save_model(converted_model, onnx_model_dir)
+
+          output = namedtuple(
+                  'ConvertModelOutput',
+                  ['onnx_model_dir']
+              )
 
           logging.info("Finished.")
+          return output(onnx_model_dir)
+
+      def _serialize_str(str_value: str) -> str:
+          if not isinstance(str_value, str):
+              raise TypeError('Value "{}" has type "{}" instead of str.'.format(
+                  str(str_value), str(type(str_value))))
+          return str_value
 
       import argparse
       _parser = argparse.ArgumentParser(prog='Convert model to onnx', description='Converts a model to ONNX format. Supported input formats: Keras.')
-      _parser.add_argument("--model", dest="model", type=str, required=True, default=argparse.SUPPRESS)
-      _parser.add_argument("--onnx-model", dest="onnx_model", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--model-dir", dest="model_dir", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--onnx-model-dir", dest="onnx_model_dir", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("----output-paths", dest="_output_paths", type=str, nargs=1)
       _parsed_args = vars(_parser.parse_args())
+      _output_files = _parsed_args.pop("_output_paths", [])
 
       _outputs = convert_model_to_onnx(**_parsed_args)
-    args:
-    - --model
-    - {inputPath: model}
-    - --onnx-model
-    - {outputPath: onnx_model}
 
+      _output_serializers = [
+          _serialize_str,
+
+      ]
+
+      import os
+      for idx, output_file in enumerate(_output_files):
+          try:
+              os.makedirs(os.path.dirname(output_file))
+          except OSError:
+              pass
+          with open(output_file, 'w') as f:
+              f.write(_output_serializers[idx](_outputs[idx]))
+    args:
+    - --model-dir
+    - {inputValue: model_dir}
+    - if:
+        cond: {isPresent: onnx_model_dir}
+        then:
+        - --onnx-model-dir
+        - {inputValue: onnx_model_dir}
+    - '----output-paths'
+    - {outputPath: onnx_model_dir}
