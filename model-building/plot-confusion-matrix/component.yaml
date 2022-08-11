@@ -1,0 +1,177 @@
+name: Plot confusion matrix
+description: Plots a confusion matrix based on a Huggingface Dataset with a test split
+  and a model trained via Keras.
+inputs:
+- {name: input_column, type: String, description: 'Input column for the model. Currently
+    only 1 column is supported. Examples: "mel_spectrogram", "pixel_values".'}
+- {name: label_column, type: String, description: 'Column with labels to be predicted.
+    Examples: "genre", "labels".'}
+- {name: prep_dataset_dir, type: String, description: 'Directory where to load test
+    data from. Should be available as a mount from a PVC. Example: "/blackboard/prep_dataset".'}
+- {name: model_dir, type: String, description: 'Directory where to load the model
+    from. Should be available as a mount from a PVC. Example: "/blackboard/model".'}
+- {name: labels, type: 'typing.List[str]', description: 'List of possible labels.
+    Example: ["Blues", "Rock", "Country"]'}
+- {name: dataset_split, type: String, description: Optional name of a dataset's split.
+    Defaults to "test"., default: test, optional: true}
+- {name: batch_size, type: Integer, description: 'Optional batch size when processing
+    the input dataset. Example: 20.', default: '20', optional: true}
+outputs:
+- {name: mlpipeline_ui_metadata}
+implementation:
+  container:
+    image: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest
+    command:
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp)
+      printf "%s" "$0" > "$program_path"
+      python3 -u "$program_path" "$@"
+    - |
+      def _make_parent_dirs_and_return_path(file_path: str):
+          import os
+          os.makedirs(os.path.dirname(file_path), exist_ok=True)
+          return file_path
+
+      def plot_confusion_matrix(
+              input_column,
+              label_column,
+              prep_dataset_dir,
+              model_dir,
+              labels,
+              mlpipeline_ui_metadata_path,
+              dataset_split = "test",
+              batch_size = 20
+      ):
+          '''
+          Plots a confusion matrix based on a Huggingface Dataset with a test split and a model trained via Keras.
+
+                  Parameters:
+                          input_column: Input column for the model. Currently only 1 column is supported. Examples: "mel_spectrogram", "pixel_values".
+                          label_column: Column with labels to be predicted. Examples: "genre", "labels".
+                          prep_dataset_dir: Directory where to load test data from. Should be available as a mount from a PVC. Example: "/blackboard/prep_dataset".
+                          model_dir: Directory where to load the model from. Should be available as a mount from a PVC. Example: "/blackboard/model".
+                          labels: List of possible labels. Example: ["Blues", "Rock", "Country"]
+                          dataset_split: Optional name of a dataset's split. Defaults to "test".
+                          batch_size: Optional batch size when processing the input dataset. Example: 20.
+                  Returns:
+                          mlpipeline_ui_metadata_path: Data to plot a confusion matrix. The plotted confusion matrix can be viewed via Kubeflow UI's Vizualization for this component inside a pipeline run.
+          '''
+          from datasets import load_from_disk
+          import json
+          import logging
+          import numpy as np
+          import pandas as pd
+          from sklearn.metrics import confusion_matrix
+          import sys
+          import tensorflow as tf
+          from transformers import DefaultDataCollator
+
+          logging.basicConfig(
+              stream=sys.stdout,
+              level=logging.INFO,
+              format='%(levelname)s %(asctime)s: %(message)s'
+          )
+
+          dataset = load_from_disk(prep_dataset_dir)
+          data_collator = DefaultDataCollator(return_tensors="tf")
+
+          test_dataset = dataset[dataset_split].to_tf_dataset(
+              columns=[input_column],
+              label_cols=[label_column],
+              shuffle=False,
+              batch_size=batch_size,
+              collate_fn=data_collator
+          )
+          # see: https://github.com/huggingface/datasets/issues/4478
+          tf.data.experimental.save(test_dataset, "./test")
+          test_dataset = tf.data.experimental.load("./test")
+
+          model = tf.keras.models.load_model(model_dir)
+
+          # see: https://github.com/huggingface/datasets/issues/4772
+          if (label_column == "labels"):
+              label_column = "label"
+          y_true = np.argmax(
+              dataset[dataset_split][label_column],
+              axis=1
+          )
+
+          y_pred = np.argmax(
+              model.predict(dataset[dataset_split][input_column]),
+              axis=1
+          )
+          confusion_matrix = confusion_matrix(y_true, y_pred)
+
+          data = []
+          for target_index, target_row in enumerate(confusion_matrix):
+              for predicted_index, count in enumerate(target_row):
+                  data.append((labels[target_index], labels[predicted_index], count))
+
+          df = pd.DataFrame(
+              data,
+              columns=['target', 'predicted', 'count']
+          )
+
+          metadata = {
+            'outputs': [{
+              'type': 'confusion_matrix',
+              'format': 'csv',
+              'schema': [
+                {'name': 'target', 'type': 'CATEGORY'},
+                {'name': 'predicted', 'type': 'CATEGORY'},
+                {'name': 'count', 'type': 'NUMBER'},
+              ],
+              "storage": "inline",
+              'source': df.to_csv(
+                  columns=['target', 'predicted', 'count'],
+                  header=False,
+                  index=False),
+              'labels': labels,
+            }]
+          }
+
+          logging.info("Dumping mlpipeline_ui_metadata...")
+          with open(mlpipeline_ui_metadata_path, 'w') as metadata_file:
+              json.dump(metadata, metadata_file)
+
+          logging.info("Finished.")
+
+      import json
+      import argparse
+      _parser = argparse.ArgumentParser(prog='Plot confusion matrix', description='Plots a confusion matrix based on a Huggingface Dataset with a test split and a model trained via Keras.')
+      _parser.add_argument("--input-column", dest="input_column", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--label-column", dest="label_column", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--prep-dataset-dir", dest="prep_dataset_dir", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--model-dir", dest="model_dir", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--labels", dest="labels", type=json.loads, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--dataset-split", dest="dataset_split", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--batch-size", dest="batch_size", type=int, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--mlpipeline-ui-metadata", dest="mlpipeline_ui_metadata_path", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
+      _parsed_args = vars(_parser.parse_args())
+
+      _outputs = plot_confusion_matrix(**_parsed_args)
+    args:
+    - --input-column
+    - {inputValue: input_column}
+    - --label-column
+    - {inputValue: label_column}
+    - --prep-dataset-dir
+    - {inputValue: prep_dataset_dir}
+    - --model-dir
+    - {inputValue: model_dir}
+    - --labels
+    - {inputValue: labels}
+    - if:
+        cond: {isPresent: dataset_split}
+        then:
+        - --dataset-split
+        - {inputValue: dataset_split}
+    - if:
+        cond: {isPresent: batch_size}
+        then:
+        - --batch-size
+        - {inputValue: batch_size}
+    - --mlpipeline-ui-metadata
+    - {outputPath: mlpipeline_ui_metadata}
