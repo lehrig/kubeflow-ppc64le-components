@@ -1,0 +1,385 @@
+name: Train model job
+description: Trains a model. Once trained, the model is persisted to model_dir.
+inputs:
+- {name: dataset_directory, type: String, description: 'Path to the directory with
+    training data. Example: "/blackboard/prep_dataset".'}
+- {name: train_specification, type: String, description: Training command as generated
+    from a Python function using kfp.components.func_to_component_text.}
+- {name: train_parameters, type: 'typing.Dict[str, str]', description: Dictionary
+    mapping formal to actual parameters for the training spacification.}
+- {name: model_name, type: String, description: 'Optional name of the model. Must
+    be unique for the targeted namespace and conform Kubernetes naming conventions.
+    Example: my-model.', default: my-model, optional: true}
+- {name: model_dir, type: String, description: 'Optional target directory where the
+    model will be stored. Should be available as a mount from a PVC. Example: "/blackboard/model".',
+  default: /blackboard/model, optional: true}
+- {name: base_image, type: String, description: 'Optional base image for model training.
+    Example: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest.', default: 'quay.io/ibm/kubeflow-notebook-image-ppc64le:latest',
+  optional: true}
+- {name: namespace, type: String, description: 'Optional namespace where the Job and
+    associated volumes will be created. By default, the same namespace as where the
+    pipeline is executed is chosen. Example: "user-example-com".', default: '', optional: true}
+- {name: node_selector, type: String, description: 'Optional node selector for worker
+    nodes. Example: nvidia.com/gpu.product: "Tesla-V100-SXM2-32GB".', default: '',
+  optional: true}
+- {name: remote_host, type: String, default: '', optional: true}
+- {name: pvc_name, type: String, description: 'Optional name to an existing persistent
+    volume claim (pvc). If given, this pvs is mounted into the training job. Example:
+    "music-genre-classification-j4ssf-blackboard-pvc".', default: '', optional: true}
+- {name: pvc_size, type: String, description: 'Optional size of the storage during
+    model training. Storage is mounted into to the Job based on a persitent volume
+    claim of the given size. Example: 10Gi.', default: 10Gi, optional: true}
+- {name: cpus, type: String, description: 'Optional CPU limit for the job. Example:
+    "1000m".', default: '8', optional: true}
+- {name: gpus, type: Integer, description: 'Optional number of GPUs for the job. Example:
+    2.', default: '0', optional: true}
+- {name: memory, type: String, description: 'Optional memory limit for the job. Example:
+    "1Gi".', default: 32Gi, optional: true}
+outputs:
+- {name: model_dir, type: String}
+- {name: logs, type: String}
+implementation:
+  container:
+    image: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest
+    command:
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp)
+      printf "%s" "$0" > "$program_path"
+      python3 -u "$program_path" "$@"
+    - |
+      def train_model_job(
+              dataset_directory,
+              train_specification,
+              train_parameters,
+              model_name = "my-model",
+              model_dir = "/blackboard/model",
+              base_image = "quay.io/ibm/kubeflow-notebook-image-ppc64le:latest",
+              namespace = "",
+              node_selector = "",
+              remote_host = "",
+              pvc_name = "",
+              pvc_size = "10Gi",
+              cpus = "8",
+              gpus = 0,
+              memory = "32Gi",
+      ):
+          '''
+          Trains a model. Once trained, the model is persisted to model_dir.
+
+                  Parameters:
+                          dataset_directory: Path to the directory with training data. Example: "/blackboard/prep_dataset".
+                          train_specification: Training command as generated from a Python function using kfp.components.func_to_component_text.
+                          train_parameters: Dictionary mapping formal to actual parameters for the training spacification.
+                          model_name: Optional name of the model. Must be unique for the targeted namespace and conform Kubernetes naming conventions. Example: my-model.
+                          model_dir: Optional target directory where the model will be stored. Should be available as a mount from a PVC. Example: "/blackboard/model".
+                          base_image: Optional base image for model training. Example: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest.
+                          namespace: Optional namespace where the Job and associated volumes will be created. By default, the same namespace as where the pipeline is executed is chosen. Example: "user-example-com".
+                          node_selector: Optional node selector for worker nodes. Example: nvidia.com/gpu.product: "Tesla-V100-SXM2-32GB".
+                          pvc_name: Optional name to an existing persistent volume claim (pvc). If given, this pvs is mounted into the training job. Example: "music-genre-classification-j4ssf-blackboard-pvc".
+                          pvc_size: Optional size of the storage during model training. Storage is mounted into to the Job based on a persitent volume claim of the given size. Example: 10Gi.
+                          cpus: Optional CPU limit for the job. Example: "1000m".
+                          gpus: Optional number of GPUs for the job. Example: 2.
+                          memory: Optional memory limit for the job. Example: "1Gi".
+                  Returns:
+                          model_dir: Target directory where the model will be stored. Same value as input model_dir. Example: "/blackboard/model".
+                          logs: Result outputs of the Job. Example: "...Job finished successfully".
+          '''
+          from collections import namedtuple
+          from datetime import datetime
+          import json
+          from kubernetes import (
+              client,
+              config,
+              utils,
+              watch
+          )
+          from kubernetes.client.rest import ApiException
+          import logging
+          import sys
+          import yaml
+
+          logging.basicConfig(
+              stream=sys.stdout,
+              level=logging.INFO,
+              format='%(levelname)s %(asctime)s: %(message)s'
+          )
+
+          SA_NAMESPACE = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
+          logging.info("Establishing cluster connection...")
+          config.load_incluster_config()
+
+          # init configuration variables
+          epoch = datetime.today().strftime('%Y%m%d%H%M%S')
+          job_name = f"job-{model_name}-{epoch}"
+
+          if namespace == "":
+              with open(SA_NAMESPACE) as f:
+                  namespace = f.read()
+          namespace_spec = f"namespace: {namespace}"
+
+          if node_selector != "":
+              node_selector = f"nodeSelector:\n        {node_selector}"
+
+          train_model_comp_yaml = yaml.safe_load(train_specification)
+          container_yaml = train_model_comp_yaml["implementation"]["container"]
+          command = container_yaml["command"]
+          args = container_yaml["args"]
+
+          actual_args = list()
+          for idx, arg in enumerate(args):
+              if type(arg) is dict:
+                  if "inputValue" in arg:
+                      # required parameter (value)
+                      key = arg["inputValue"]
+                      if key in train_parameters:
+                          actual_args.append(train_parameters[key])
+                      else:
+                          err = f"Required parameter '{key}' missing in componenent input!"
+                          print(err)
+                          raise Exception(err)
+                  elif "if" in arg:
+                      # optional parameter
+                      key = arg["if"]["cond"]["isPresent"]
+                      if key in train_parameters:
+                          actual_args.append(f"--{key}")
+                          actual_args.append(train_parameters[key])
+              else:
+                  # required parameter (key)
+                  actual_args.append(arg)
+
+          train_command = json.dumps(command + actual_args)
+
+          logging.info("=======================================")
+          logging.info("Derived configurations")
+          logging.info("=======================================")
+          logging.info(f"job_name: {job_name}")
+          logging.info(f"namespace: {namespace}")
+          logging.info(f"actual_args: {actual_args}")
+          logging.info(f"train_command: {train_command}")
+          logging.info("=======================================")
+
+          yaml_objects = list()
+
+          if (pvc_name == ""):
+              pvc_name = {job_name}-pvc
+              pvc_spec = f"""apiVersion: batch/v1
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: {pvc_name}
+        {namespace_spec}
+      spec:
+        accessModes:
+        - ReadWriteMany
+        resources:
+          requests:
+            storage: {pvc_size}
+      """
+              yaml_objects.append(yaml.safe_load(pvc_spec))
+
+          job_spec = f"""apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: {job_name}
+        {namespace_spec}
+      spec:
+        template:
+          metadata:
+            annotations:
+              sidecar.istio.io/inject: "false"
+          spec:
+            {node_selector}
+            containers:
+              - name: training-container
+                image: {base_image}
+                command: {train_command}
+                volumeMounts:
+                  - mountPath: /blackboard
+                    name: training
+                restartPolicy: Never
+                resources:
+                  limits:
+                    cpu: {cpus}
+                    memory: {memory}
+                    nvidia.com/gpu: {gpus}
+            volumes:
+              - name: training
+                persistentVolumeClaim:
+                  claimName: {pvc_name}
+            restartPolicy: Never
+      """
+          yaml_objects=[yaml.safe_load(job_spec)]
+
+          logging.info(f"Starting Job '{namespace}.{job_name}'")
+          utils.create_from_yaml(
+              client.ApiClient(),
+              yaml_objects=yaml_objects
+          )
+
+          logging.info("Reading job information...")
+          job_def = client.BatchV1Api().read_namespaced_job(
+              name=job_name,
+              namespace=namespace
+          )
+          logging.info(f"Job information: {job_def}")
+
+          logging.info("Waiting for Job to succeed...")
+          w = watch.Watch()
+          for event in w.stream(
+              client.BatchV1Api().list_namespaced_job,
+              namespace=namespace,
+              label_selector=f"job-name={job_name}",
+              timeout_seconds=0
+          ):
+              object = event['object']
+
+              if object.status.succeeded:
+                  w.stop()
+                  logging.info("Job finished.")
+                  break
+
+              if not object.status.active and object.status.failed:
+                  w.stop()
+                  logging.error("Job Failed!")
+                  raise Exception("Job Failed")
+
+          logging.info("Reading logs...")
+          pods_list = client.CoreV1Api().list_namespaced_pod(
+              namespace=namespace,
+              label_selector="controller-uid=" + job_def.metadata.labels["controller-uid"],
+              timeout_seconds=10
+          )
+          try:
+              pod_log_response = client.CoreV1Api().read_namespaced_pod_log(
+                  name=pods_list.items[0].metadata.name,
+                  namespace=namespace,
+                  _return_http_data_only=True,
+                  _preload_content=False
+              )
+              pod_log = pod_log_response.data.decode("utf-8")
+          except ApiException as e:
+              logging.error(f"Error reading logs: {e}")
+
+          logging.info("Deleting Job resources...")
+          client.BatchV1Api().delete_namespaced_job(job_name, namespace)
+
+          logging.info("Finished.")
+
+          output = namedtuple(
+              'TrainModelOutputs',
+              ['model_dir', 'logs']
+          )
+
+          return output(model_dir, pod_log)
+
+      def _serialize_str(str_value: str) -> str:
+          if not isinstance(str_value, str):
+              raise TypeError('Value "{}" has type "{}" instead of str.'.format(
+                  str(str_value), str(type(str_value))))
+          return str_value
+
+      import json
+      import argparse
+      _parser = argparse.ArgumentParser(prog='Train model job', description='Trains a model. Once trained, the model is persisted to model_dir.')
+      _parser.add_argument("--dataset-directory", dest="dataset_directory", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--train-specification", dest="train_specification", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--train-parameters", dest="train_parameters", type=json.loads, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--model-name", dest="model_name", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--model-dir", dest="model_dir", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--base-image", dest="base_image", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--namespace", dest="namespace", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--node-selector", dest="node_selector", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--remote-host", dest="remote_host", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--pvc-name", dest="pvc_name", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--pvc-size", dest="pvc_size", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--cpus", dest="cpus", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--gpus", dest="gpus", type=int, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--memory", dest="memory", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("----output-paths", dest="_output_paths", type=str, nargs=2)
+      _parsed_args = vars(_parser.parse_args())
+      _output_files = _parsed_args.pop("_output_paths", [])
+
+      _outputs = train_model_job(**_parsed_args)
+
+      _output_serializers = [
+          _serialize_str,
+          _serialize_str,
+
+      ]
+
+      import os
+      for idx, output_file in enumerate(_output_files):
+          try:
+              os.makedirs(os.path.dirname(output_file))
+          except OSError:
+              pass
+          with open(output_file, 'w') as f:
+              f.write(_output_serializers[idx](_outputs[idx]))
+    args:
+    - --dataset-directory
+    - {inputValue: dataset_directory}
+    - --train-specification
+    - {inputValue: train_specification}
+    - --train-parameters
+    - {inputValue: train_parameters}
+    - if:
+        cond: {isPresent: model_name}
+        then:
+        - --model-name
+        - {inputValue: model_name}
+    - if:
+        cond: {isPresent: model_dir}
+        then:
+        - --model-dir
+        - {inputValue: model_dir}
+    - if:
+        cond: {isPresent: base_image}
+        then:
+        - --base-image
+        - {inputValue: base_image}
+    - if:
+        cond: {isPresent: namespace}
+        then:
+        - --namespace
+        - {inputValue: namespace}
+    - if:
+        cond: {isPresent: node_selector}
+        then:
+        - --node-selector
+        - {inputValue: node_selector}
+    - if:
+        cond: {isPresent: remote_host}
+        then:
+        - --remote-host
+        - {inputValue: remote_host}
+    - if:
+        cond: {isPresent: pvc_name}
+        then:
+        - --pvc-name
+        - {inputValue: pvc_name}
+    - if:
+        cond: {isPresent: pvc_size}
+        then:
+        - --pvc-size
+        - {inputValue: pvc_size}
+    - if:
+        cond: {isPresent: cpus}
+        then:
+        - --cpus
+        - {inputValue: cpus}
+    - if:
+        cond: {isPresent: gpus}
+        then:
+        - --gpus
+        - {inputValue: gpus}
+    - if:
+        cond: {isPresent: memory}
+        then:
+        - --memory
+        - {inputValue: memory}
+    - '----output-paths'
+    - {outputPath: model_dir}
+    - {outputPath: logs}
