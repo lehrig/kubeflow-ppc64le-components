@@ -7,9 +7,9 @@ inputs:
 - {name: label_column, type: String, description: 'Column with labels to be predicted.
     Examples: "genre", "labels".'}
 - {name: prep_dataset_dir, type: String, description: 'Directory where to load test
-    data from. Should be available as a mount from a PVC. Example: "/blackboard/prep_dataset".'}
+    data from. Example: "/blackboard/prep_dataset".'}
 - {name: model_dir, type: String, description: 'Directory where to load the model
-    from. Should be available as a mount from a PVC. Example: "/blackboard/model".'}
+    from. Example: "/blackboard/model".'}
 - {name: labels, type: 'typing.List[str]', description: 'List of possible labels.
     Example: ["Blues", "Rock", "Country"]'}
 - {name: dataset_split, type: String, description: Optional name of a dataset's split.
@@ -50,8 +50,8 @@ implementation:
                   Parameters:
                           input_column: Input column for the model. Currently only 1 column is supported. Examples: "mel_spectrogram", "pixel_values".
                           label_column: Column with labels to be predicted. Examples: "genre", "labels".
-                          prep_dataset_dir: Directory where to load test data from. Should be available as a mount from a PVC. Example: "/blackboard/prep_dataset".
-                          model_dir: Directory where to load the model from. Should be available as a mount from a PVC. Example: "/blackboard/model".
+                          prep_dataset_dir: Directory where to load test data from. Example: "/blackboard/prep_dataset".
+                          model_dir: Directory where to load the model from. Example: "/blackboard/model".
                           labels: List of possible labels. Example: ["Blues", "Rock", "Country"]
                           dataset_split: Optional name of a dataset's split. Defaults to "test".
                           batch_size: Optional batch size when processing the input dataset. Example: 20.
@@ -73,6 +73,7 @@ implementation:
               level=logging.INFO,
               format='%(levelname)s %(asctime)s: %(message)s'
           )
+          logger = logging.getLogger()
 
           dataset = load_from_disk(prep_dataset_dir)
           data_collator = DefaultDataCollator(return_tensors="tf")
@@ -132,11 +133,11 @@ implementation:
             }]
           }
 
-          logging.info("Dumping mlpipeline_ui_metadata...")
+          logger.info("Dumping mlpipeline_ui_metadata...")
           with open(mlpipeline_ui_metadata_path, 'w') as metadata_file:
               json.dump(metadata, metadata_file)
 
-          logging.info("Finished.")
+          logger.info("Finished.")
 
       import json
       import argparse
@@ -158,9 +159,9 @@ implementation:
     - --label-column
     - {inputValue: label_column}
     - --prep-dataset-dir
-    - {inputValue: prep_dataset_dir}
+    - {inputPath: prep_dataset_dir}
     - --model-dir
-    - {inputValue: model_dir}
+    - {inputPath: model_dir}
     - --labels
     - {inputValue: labels}
     - if:

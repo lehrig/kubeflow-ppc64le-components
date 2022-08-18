@@ -2,7 +2,6 @@ name: Convert model to onnx
 description: 'Converts a model to ONNX format. Supported input formats: Keras.'
 inputs:
 - {name: model_dir, type: String}
-- {name: onnx_model_dir, type: String, default: /blackboard/onnx, optional: true}
 outputs:
 - {name: onnx_model_dir, type: String}
 implementation:
@@ -16,13 +15,17 @@ implementation:
       printf "%s" "$0" > "$program_path"
       python3 -u "$program_path" "$@"
     - |
+      def _make_parent_dirs_and_return_path(file_path: str):
+          import os
+          os.makedirs(os.path.dirname(file_path), exist_ok=True)
+          return file_path
+
       def convert_model_to_onnx(
           model_dir,
-          onnx_model_dir = "/blackboard/onnx"
+          onnx_model_dir
       ):
           """Converts a model to ONNX format. Supported input formats: Keras."""
 
-          from collections import namedtuple
           import logging
           import onnx
           import sys
@@ -34,60 +37,28 @@ implementation:
               level=logging.INFO,
               format='%(levelname)s %(asctime)s: %(message)s'
           )
+          logger = logging.getLogger()
 
-          logging.info(f"Loading model from '{model_dir}'...")
+          logger.info(f"Loading model from '{model_dir}'...")
           keras_model = tf.keras.models.load_model(model_dir)
 
-          logging.info("Converting model to ONNX...")
+          logger.info("Converting model to ONNX...")
           converted_model, _ = tf2onnx.convert.from_keras(keras_model)
 
-          logging.info(f"Saving ONNX model to '{onnx_model_dir}'...")
+          logger.info(f"Saving ONNX model to '{onnx_model_dir}'...")
           onnx.save_model(converted_model, onnx_model_dir)
 
-          output = namedtuple(
-                  'ConvertModelOutput',
-                  ['onnx_model_dir']
-              )
-
-          logging.info("Finished.")
-          return output(onnx_model_dir)
-
-      def _serialize_str(str_value: str) -> str:
-          if not isinstance(str_value, str):
-              raise TypeError('Value "{}" has type "{}" instead of str.'.format(
-                  str(str_value), str(type(str_value))))
-          return str_value
+          logger.info("Finished.")
 
       import argparse
       _parser = argparse.ArgumentParser(prog='Convert model to onnx', description='Converts a model to ONNX format. Supported input formats: Keras.')
       _parser.add_argument("--model-dir", dest="model_dir", type=str, required=True, default=argparse.SUPPRESS)
-      _parser.add_argument("--onnx-model-dir", dest="onnx_model_dir", type=str, required=False, default=argparse.SUPPRESS)
-      _parser.add_argument("----output-paths", dest="_output_paths", type=str, nargs=1)
+      _parser.add_argument("--onnx-model-dir", dest="onnx_model_dir", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
       _parsed_args = vars(_parser.parse_args())
-      _output_files = _parsed_args.pop("_output_paths", [])
 
       _outputs = convert_model_to_onnx(**_parsed_args)
-
-      _output_serializers = [
-          _serialize_str,
-
-      ]
-
-      import os
-      for idx, output_file in enumerate(_output_files):
-          try:
-              os.makedirs(os.path.dirname(output_file))
-          except OSError:
-              pass
-          with open(output_file, 'w') as f:
-              f.write(_output_serializers[idx](_outputs[idx]))
     args:
     - --model-dir
-    - {inputValue: model_dir}
-    - if:
-        cond: {isPresent: onnx_model_dir}
-        then:
-        - --onnx-model-dir
-        - {inputValue: onnx_model_dir}
-    - '----output-paths'
+    - {inputPath: model_dir}
+    - --onnx-model-dir
     - {outputPath: onnx_model_dir}

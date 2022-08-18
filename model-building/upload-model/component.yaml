@@ -45,8 +45,9 @@ implementation:
               level=logging.INFO,
               format='%(levelname)s %(asctime)s: %(message)s'
           )
+          logger = logging.getLogger()
 
-          logging.info(f"Establishing MinIO connection to '{minio_url}'...")
+          logger.info(f"Establishing MinIO connection to '{minio_url}'...")
           minio_client = Minio(minio_url,
                                access_key=minio_user,
                                secret_key=minio_pass,
@@ -60,21 +61,21 @@ implementation:
                   export_bucket_exists = True
 
           if not export_bucket_exists:
-              logging.info(f"Creating bucket '{export_bucket}'...")
+              logger.info(f"Creating bucket '{export_bucket}'...")
               minio_client.make_bucket(bucket_name=export_bucket)
 
           model_path = f"{model_name}/{model_version}/model.{model_format}"
           s3_address = f"s3://{minio_url}/{export_bucket}/{model_format}"
           triton_s3_address = f"{s3_address}/{model_path}"
 
-          logging.info(f"Saving onnx file to MinIO (s3 address: {s3_address})...")
+          logger.info(f"Saving onnx file to MinIO (s3 address: {s3_address})...")
           minio_client.fput_object(
               bucket_name=export_bucket,  # bucket name in Minio
               object_name=f"{model_format}/{model_path}",  # file name in bucket of Minio / for Triton name MUST be model.onnx!
               file_path=file_dir,  # file path / name in local system
           )
 
-          logging.info("Finished.")
+          logger.info("Finished.")
           out_tuple = namedtuple("UploadOutput", ["s3_address", "triton_s3_address"])
           return out_tuple(s3_address, triton_s3_address)
 
@@ -116,7 +117,7 @@ implementation:
               f.write(_output_serializers[idx](_outputs[idx]))
     args:
     - --file-dir
-    - {inputValue: file_dir}
+    - {inputPath: file_dir}
     - --minio-url
     - {inputValue: minio_url}
     - --minio-user

@@ -3,18 +3,14 @@ description: Load a Huggingface Dataset.
 inputs:
 - {name: path, type: String, description: 'Path from which to load the dataset. Huggingfaces
     hub for datasets is supported. Example: "Lehrig/Monkey-Species-Collection".'}
-- {name: blackboard_dir, type: String, description: 'Target directory of all data
-    of a pipeline. Example: "/blackboard".'}
 - {name: configuration, type: String, description: 'Name of the dataset configuration
     to load. Example: "downsized".', default: '', optional: true}
 - {name: label_column, type: String, description: 'Optional name of a label column
     to be fetched as optional, additional output. Example: "label".', default: '',
   optional: true}
-- {name: dataset_dir, type: String, description: 'Target directory where the dataset
-    will be loaded to. Should be available as a mount from a PVC. Example: "/blackboard/dataset".',
-  default: /blackboard/dataset, optional: true}
 outputs:
-- {name: dataset_dir, type: String}
+- {name: dataset_dir, type: String, description: 'Target directory where the dataset
+    will be loaded to. Should be available as a mount from a PVC. Example: "/blackboard/dataset".'}
 - {name: labels, type: 'typing.List[str]'}
 implementation:
   container:
@@ -27,25 +23,26 @@ implementation:
       printf "%s" "$0" > "$program_path"
       python3 -u "$program_path" "$@"
     - |
+      def _make_parent_dirs_and_return_path(file_path: str):
+          import os
+          os.makedirs(os.path.dirname(file_path), exist_ok=True)
+          return file_path
+
       def load_dataset(
           path,
-          blackboard_dir,
+          dataset_dir,
           configuration = "",
           label_column = "",
-          dataset_dir = "/blackboard/dataset",
       ):
           '''
           Load a Huggingface Dataset.
 
                   Parameters:
                           path: Path from which to load the dataset. Huggingfaces hub for datasets is supported. Example: "Lehrig/Monkey-Species-Collection".
-                          blackboard_dir: Target directory of all data of a pipeline. Example: "/blackboard".
+                          dataset_dir: Target directory where the dataset will be loaded to. Should be available as a mount from a PVC. Example: "/blackboard/dataset".
                           configuration: Name of the dataset configuration to load. Example: "downsized".
                           label_column: Optional name of a label column to be fetched as optional, additional output. Example: "label".
-                          dataset_dir: Target directory where the dataset will be loaded to. Should be available as a mount from a PVC. Example: "/blackboard/dataset".
-
                   Returns:
-                          dataset_dir: Target directory where the dataset will be loaded to. Same value as input dataset_dir. Example: "/blackboard/dataset".
                           labels: List of labels, if available. Empty list otherwise. Example: ["cat", "dog"]
           '''
 
@@ -62,9 +59,6 @@ implementation:
               level=logging.INFO,
               format='%(levelname)s %(asctime)s: %(message)s'
           )
-
-          if not os.path.exists(blackboard_dir):
-              raise ValueError(f"Missing blackboard mount of a persistent volume (PV) into '{dataset_dir}'.")
 
           if not configuration:
               configuration = None
@@ -100,12 +94,11 @@ implementation:
               labels = dataset.features[label_column].names
           output = namedtuple(
                   'LoadDatasetOutput',
-                  ['dataset_dir',
-                   'labels']
+                  ['labels']
               )
 
           logging.info("Finished.")
-          return output(dataset_dir, labels)
+          return output(labels)
 
       def _serialize_json(obj) -> str:
           if isinstance(obj, str):
@@ -122,27 +115,19 @@ implementation:
 
           return json.dumps(obj, default=default_serializer, sort_keys=True)
 
-      def _serialize_str(str_value: str) -> str:
-          if not isinstance(str_value, str):
-              raise TypeError('Value "{}" has type "{}" instead of str.'.format(
-                  str(str_value), str(type(str_value))))
-          return str_value
-
       import argparse
       _parser = argparse.ArgumentParser(prog='Load dataset', description='Load a Huggingface Dataset.')
       _parser.add_argument("--path", dest="path", type=str, required=True, default=argparse.SUPPRESS)
-      _parser.add_argument("--blackboard-dir", dest="blackboard_dir", type=str, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--configuration", dest="configuration", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--label-column", dest="label_column", type=str, required=False, default=argparse.SUPPRESS)
-      _parser.add_argument("--dataset-dir", dest="dataset_dir", type=str, required=False, default=argparse.SUPPRESS)
-      _parser.add_argument("----output-paths", dest="_output_paths", type=str, nargs=2)
+      _parser.add_argument("--dataset-dir", dest="dataset_dir", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("----output-paths", dest="_output_paths", type=str, nargs=1)
       _parsed_args = vars(_parser.parse_args())
       _output_files = _parsed_args.pop("_output_paths", [])
 
       _outputs = load_dataset(**_parsed_args)
 
       _output_serializers = [
-          _serialize_str,
           _serialize_json,
 
       ]
@@ -158,8 +143,6 @@ implementation:
     args:
     - --path
     - {inputValue: path}
-    - --blackboard-dir
-    - {inputValue: blackboard_dir}
     - if:
         cond: {isPresent: configuration}
         then:
@@ -170,11 +153,7 @@ implementation:
         then:
         - --label-column
         - {inputValue: label_column}
-    - if:
-        cond: {isPresent: dataset_dir}
-        then:
-        - --dataset-dir
-        - {inputValue: dataset_dir}
-    - '----output-paths'
+    - --dataset-dir
     - {outputPath: dataset_dir}
+    - '----output-paths'
     - {outputPath: labels}
