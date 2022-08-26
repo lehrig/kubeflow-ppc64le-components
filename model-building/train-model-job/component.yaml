@@ -5,8 +5,8 @@ inputs:
     training data.}
 - {name: train_specification, type: String, description: Training command as generated
     from a Python function using kfp.components.func_to_component_text.}
-- {name: train_parameters, type: 'typing.Dict[str, str]', description: 'Dictionary
-    mapping formal to actual parameters for the training spacification.                    '}
+- {name: train_parameters, type: 'typing.Dict[str, str]', description: Dictionary
+    mapping formal to actual parameters for the training spacification.}
 - {name: train_mount, type: String, description: 'Optional mounting point for training
     data of an existing PVC. Example: "/train".', default: /train, optional: true}
 - {name: model_name, type: String, description: 'Optional name of the model. Must
@@ -21,23 +21,33 @@ inputs:
 - {name: node_selector, type: String, description: 'Optional node selector for worker
     nodes. Example: nvidia.com/gpu.product: "Tesla-V100-SXM2-32GB".', default: '',
   optional: true}
-- {name: remote_host, type: String, default: '', optional: true}
 - {name: pvc_name, type: String, description: 'Optional name to an existing persistent
-    volume claim (pvc). If given, this pvs is mounted into the training job. Example:
+    volume claim (pvc). If given, this pvc is mounted into the training job. Example:
     "music-genre-classification-j4ssf-training-pvc".', default: '', optional: true}
 - {name: pvc_size, type: String, description: 'Optional size of the storage during
     model training. Storage is mounted into to the Job based on a persitent volume
     claim of the given size. Example: 10Gi.', default: 10Gi, optional: true}
-- {name: cpus, type: String, description: 'Optional CPU limit for the job. Example:
-    "1000m".', default: '8', optional: true}
+- {name: cpus, type: String, description: 'Optional CPU limit for the job. Leave empty
+    for cluster defaults (typically no limit). Example: "1000m".', default: '', optional: true}
 - {name: gpus, type: Integer, description: 'Optional number of GPUs for the job. Example:
     2.', default: '0', optional: true}
-- {name: memory, type: String, description: 'Optional memory limit for the job. Example:
-    "1Gi".', default: 32Gi, optional: true}
+- {name: memory, type: String, description: 'Optional memory limit for the job. Leave
+    empty for cluster defaults (typically no limit). Example: "1Gi".', default: '',
+  optional: true}
+- {name: remote_host, type: String, description: 'Optional remote kubernetes cluster
+    to run the job in. Requires to have a suitable bearer token mounted from a secret
+    to this component such that the environment variable TOKEN can be used. Example:
+    "https://XXX.XXX.XXX.XXX:443".', default: '', optional: true}
+- {name: minio_url, type: String, description: 'Optional URL to MinIO object store.
+    Username (MINIO_USER) and password (MINIO_PASS) have to be mounted via k8s_secret_key_to_env.
+    Example: "minio-service.kubeflow:9000".', default: 'minio-service.kubeflow:9000',
+  optional: true}
+- {name: minio_secret, type: String, default: mlpipeline-minio-artifact, optional: true}
+- {name: upload_bucket, type: String, description: 'Optional bucket name when using
+    MinIO for data synchronization. Example: "temp".', default: jobdata, optional: true}
 outputs:
 - {name: model_dir, type: String, description: Target path where the model will be
     stored.}
-- {name: logs, type: String}
 implementation:
   container:
     image: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest
@@ -48,176 +58,755 @@ implementation:
       program_path=$(mktemp)
       printf "%s" "$0" > "$program_path"
       python3 -u "$program_path" "$@"
-    - "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n   \
-      \ os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return file_path\n\
-      \ndef train_model_job(\n        dataset_directory,\n        train_specification,\n\
-      \        train_parameters,\n        model_dir,\n        train_mount = \"/train\"\
-      ,\n        model_name = \"my-model\",\n        base_image = \"quay.io/ibm/kubeflow-notebook-image-ppc64le:latest\"\
-      ,\n        namespace = \"\",\n        node_selector = \"\",\n        remote_host\
-      \ = \"\",\n        pvc_name = \"\",\n        pvc_size = \"10Gi\",\n        cpus\
-      \ = \"8\",\n        gpus = 0,\n        memory = \"32Gi\",\n):\n    '''\n   \
-      \ Trains a model. Once trained, the model is persisted to model_dir.\n\n   \
-      \         Parameters:\n                    dataset_directory: Path to the directory\
-      \ with training data.\n                    train_specification: Training command\
-      \ as generated from a Python function using kfp.components.func_to_component_text.\n\
-      \                    train_parameters: Dictionary mapping formal to actual parameters\
-      \ for the training spacification.                    \n                    model_dir:\
-      \ Target path where the model will be stored.\n                    train_mount:\
-      \ Optional mounting point for training data of an existing PVC. Example: \"\
-      /train\".\n                    model_name: Optional name of the model. Must\
-      \ be unique for the targeted namespace and conform Kubernetes naming conventions.\
-      \ Example: my-model.\n                    base_image: Optional base image for\
-      \ model training. Example: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest.\n\
-      \                    namespace: Optional namespace where the Job and associated\
-      \ volumes will be created. By default, the same namespace as where the pipeline\
-      \ is executed is chosen. Example: \"user-example-com\".\n                  \
-      \  node_selector: Optional node selector for worker nodes. Example: nvidia.com/gpu.product:\
-      \ \"Tesla-V100-SXM2-32GB\".\n                    pvc_name: Optional name to\
-      \ an existing persistent volume claim (pvc). If given, this pvs is mounted into\
-      \ the training job. Example: \"music-genre-classification-j4ssf-training-pvc\"\
-      .\n                    pvc_size: Optional size of the storage during model training.\
-      \ Storage is mounted into to the Job based on a persitent volume claim of the\
-      \ given size. Example: 10Gi.\n                    cpus: Optional CPU limit for\
-      \ the job. Example: \"1000m\".\n                    gpus: Optional number of\
-      \ GPUs for the job. Example: 2.\n                    memory: Optional memory\
-      \ limit for the job. Example: \"1Gi\".\n            Returns:\n             \
-      \       logs: Result outputs of the Job. Example: \"...Job finished successfully\"\
-      .\n    '''\n    from collections import namedtuple\n    from datetime import\
-      \ datetime\n    import errno\n    import json\n    from kubernetes import (\n\
-      \        client,\n        config,\n        utils,\n        watch\n    )\n  \
-      \  from kubernetes.client.rest import ApiException\n    import logging\n   \
-      \ import os\n    import shutil\n    import sys\n    import yaml\n\n    logging.basicConfig(\n\
-      \        stream=sys.stdout,\n        level=logging.INFO,\n        format='%(levelname)s\
-      \ %(asctime)s: %(message)s'\n    )\n    logger = logging.getLogger()\n\n   \
-      \ SA_NAMESPACE = \"/var/run/secrets/kubernetes.io/serviceaccount/namespace\"\
-      \n\n    logger.info(\"Establishing cluster connection...\")\n    config.load_incluster_config()\n\
-      \n    # init configuration variables\n    epoch = datetime.today().strftime('%Y%m%d%H%M%S')\n\
-      \    job_name = f\"job-{model_name}-{epoch}\"\n\n    if namespace == \"\":\n\
-      \        with open(SA_NAMESPACE) as f:\n            namespace = f.read()\n \
-      \   namespace_spec = f\"namespace: {namespace}\"\n\n    if node_selector !=\
-      \ \"\":\n        node_selector = f\"nodeSelector:\\n        {node_selector}\"\
-      \n\n    train_model_comp_yaml = yaml.safe_load(train_specification)\n    container_yaml\
-      \ = train_model_comp_yaml[\"implementation\"][\"container\"]\n    command =\
-      \ container_yaml[\"command\"]\n    args = container_yaml[\"args\"]\n\n    pathParameters\
-      \ = {\n        \"dataset_directory\": dataset_directory,\n        \"model_dir\"\
-      : model_dir\n    }\n\n    def clone_path(source, target):\n        try:\n  \
-      \          logger.info(f\"Cloning source path {source} to {target}...\")\n \
-      \           shutil.copytree(source, target)\n            logger.info(f\"Cloning\
-      \ finished. Target path contents:\")\n            logger.info(os.listdir(target))\n\
-      \        except OSError as e:\n            if e.errno in (errno.ENOTDIR, errno.EINVAL):\n\
-      \                shutil.copy(source, target)\n            else: raise   \n\n\
-      \    actual_args = list()\n    outputs = list()\n    for idx, arg in enumerate(args):\n\
-      \        if type(arg) is dict:\n            if \"inputValue\" in arg:\n    \
-      \            # required parameter (value)\n                key = arg[\"inputValue\"\
-      ]\n                if key in train_parameters:\n                    actual_args.append(train_parameters[key])\n\
-      \                else:\n                    err = f\"Required parameter '{key}'\
-      \ missing in component input!\"\n                    print(err)\n          \
-      \          raise Exception(err)\n            elif \"if\" in arg:\n         \
-      \       # optional parameter\n                key = arg[\"if\"][\"cond\"][\"\
-      isPresent\"]\n                if key in train_parameters:\n                \
-      \    actual_args.append(f\"--{key}\")\n                    actual_args.append(train_parameters[key])\n\
-      \            elif \"inputPath\" in arg:\n                # required InputPath\n\
-      \                key = arg[\"inputPath\"]\n                if key in train_parameters:\n\
-      \                    path_key = train_parameters[key]\n                    if\
-      \ path_key in pathParameters:\n                        mount = f\"{train_mount}{pathParameters[path_key]}\"\
-      \n                        clone_path(pathParameters[path_key], mount)\n    \
-      \                    actual_args.append(mount)\n                    else:\n\
-      \                        err = f\"InputPath '{path_key}' unavailable in training\
-      \ component!\"\n                        print(err)\n                       \
-      \ raise Exception(err)\n                else:\n                    err = f\"\
-      Required parameter '{key}' missing in component input!\"\n                 \
-      \   print(err)\n                    raise Exception(err)\n            elif \"\
-      outputPath\" in arg:\n                # required OutputPath\n              \
-      \  key = arg[\"outputPath\"]\n                if key in train_parameters:\n\
-      \                    path_key = train_parameters[key]\n                    if\
-      \ path_key in pathParameters:\n                        mount = f\"{train_mount}{pathParameters[path_key]}\"\
-      \n                        outputs.append((mount, pathParameters[path_key]))\n\
-      \                        actual_args.append(mount)\n                    else:\n\
-      \                        err = f\"OutputPath '{path_key}' unavailable in training\
-      \ component!\"\n                        print(err)\n                       \
-      \ raise Exception(err)\n                else:\n                    err = f\"\
-      Required parameter '{key}' missing in component input!\"\n                 \
-      \   print(err)\n                    raise Exception(err)\n        else:\n  \
-      \          # required parameter (key)\n            actual_args.append(arg)\n\
-      \n    train_command = json.dumps(command + actual_args)\n\n    logger.info(\"\
-      =======================================\")\n    logger.info(\"Derived configurations\"\
-      )\n    logger.info(\"=======================================\")\n    logger.info(f\"\
-      job_name: {job_name}\")\n    logger.info(f\"namespace: {namespace}\")\n    logger.info(f\"\
-      actual_args: {actual_args}\")\n    logger.info(f\"train_command: {train_command}\"\
-      )\n    logger.info(\"=======================================\")\n\n    yaml_objects\
-      \ = list()\n\n    if (pvc_name == \"\"):\n        pvc_name = f\"{job_name}-pvc\"\
-      \n        pvc_spec = f\"\"\"apiVersion: batch/v1\napiVersion: v1\nkind: PersistentVolumeClaim\n\
-      metadata:\n  name: {pvc_name}\n  {namespace_spec}\nspec:\n  accessModes:\n \
-      \ - ReadWriteMany\n  resources:\n    requests:\n      storage: {pvc_size}\n\"\
-      \"\"\n        yaml_objects.append(yaml.safe_load(pvc_spec))\n\n    job_spec\
-      \ = f\"\"\"apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: {job_name}\n\
-      \  {namespace_spec}\nspec:\n  template:\n    metadata:\n      annotations:\n\
-      \        sidecar.istio.io/inject: \"false\"\n    spec:\n      {node_selector}\n\
-      \      containers:\n        - name: training-container\n          image: {base_image}\n\
-      \          command: {train_command}\n          volumeMounts:\n            -\
-      \ mountPath: {train_mount}\n              name: training\n          restartPolicy:\
-      \ Never\n          resources:\n            limits:\n              cpu: {cpus}\n\
-      \              memory: {memory}\n              nvidia.com/gpu: {gpus}\n    \
-      \  volumes:\n        - name: training\n          persistentVolumeClaim:\n  \
-      \          claimName: {pvc_name}\n      restartPolicy: Never\n\"\"\"\n    yaml_objects.append(yaml.safe_load(job_spec))\n\
-      \n    logger.info(f\"Starting Job '{namespace}.{job_name}'\")\n    utils.create_from_yaml(\n\
-      \        client.ApiClient(),\n        yaml_objects=yaml_objects\n    )\n\n \
-      \   logger.info(\"Reading job information...\")\n    job_def = client.BatchV1Api().read_namespaced_job(\n\
-      \        name=job_name,\n        namespace=namespace\n    )\n\n    if logger.isEnabledFor(logging.DEBUG):\n\
-      \        logger.debug(f\"Job information: {job_def}\")\n\n    logger.info(\"\
-      Waiting for Job to succeed...\")\n    w = watch.Watch()\n    for event in w.stream(\n\
-      \        client.BatchV1Api().list_namespaced_job,\n        namespace=namespace,\n\
-      \        label_selector=f\"job-name={job_name}\",\n        timeout_seconds=0\n\
-      \    ):\n        object = event['object']\n\n        if object.status.succeeded:\n\
-      \            w.stop()\n            logger.info(\"Job finished.\")\n        \
-      \    break\n\n        if not object.status.active and object.status.failed:\n\
-      \            w.stop()\n            logger.error(\"Job Failed!\")\n         \
-      \   raise Exception(\"Job Failed\")\n\n    logger.info(\"Receiving outputs...\"\
-      )\n    for (source, target) in outputs:\n        clone_path(source, target)\n\
-      \n    logger.info(\"Reading logs...\")\n    pods_list = client.CoreV1Api().list_namespaced_pod(\n\
-      \        namespace=namespace,\n        label_selector=\"controller-uid=\" +\
-      \ job_def.metadata.labels[\"controller-uid\"],\n        timeout_seconds=10\n\
-      \    )\n    try:\n        pod_log_response = client.CoreV1Api().read_namespaced_pod_log(\n\
-      \            name=pods_list.items[0].metadata.name,\n            namespace=namespace,\n\
-      \            _return_http_data_only=True,\n            _preload_content=False\n\
-      \        )\n        pod_log = pod_log_response.data.decode(\"utf-8\")\n    except\
-      \ ApiException as e:\n        logger.error(f\"Error reading logs: {e}\")\n\n\
-      \    logger.info(\"Deleting Job resources...\")\n    client.BatchV1Api().delete_namespaced_job(job_name,\
-      \ namespace)\n\n    logger.info(\"Preparing outputs...\")\n    if not os.path.exists(model_dir):\n\
-      \        os.makedirs(model_dir)\n    output = namedtuple(\n        'TrainModelOutputs',\n\
-      \        ['logs']\n    )\n\n    logger.info(\"Finished.\")\n    return output(pod_log)\n\
-      \ndef _serialize_str(str_value: str) -> str:\n    if not isinstance(str_value,\
-      \ str):\n        raise TypeError('Value \"{}\" has type \"{}\" instead of str.'.format(\n\
-      \            str(str_value), str(type(str_value))))\n    return str_value\n\n\
-      import json\nimport argparse\n_parser = argparse.ArgumentParser(prog='Train\
-      \ model job', description='Trains a model. Once trained, the model is persisted\
-      \ to model_dir.')\n_parser.add_argument(\"--dataset-directory\", dest=\"dataset_directory\"\
-      , type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"\
-      --train-specification\", dest=\"train_specification\", type=str, required=True,\
-      \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--train-parameters\", dest=\"\
-      train_parameters\", type=json.loads, required=True, default=argparse.SUPPRESS)\n\
-      _parser.add_argument(\"--train-mount\", dest=\"train_mount\", type=str, required=False,\
-      \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--model-name\", dest=\"\
-      model_name\", type=str, required=False, default=argparse.SUPPRESS)\n_parser.add_argument(\"\
-      --base-image\", dest=\"base_image\", type=str, required=False, default=argparse.SUPPRESS)\n\
-      _parser.add_argument(\"--namespace\", dest=\"namespace\", type=str, required=False,\
-      \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--node-selector\", dest=\"\
-      node_selector\", type=str, required=False, default=argparse.SUPPRESS)\n_parser.add_argument(\"\
-      --remote-host\", dest=\"remote_host\", type=str, required=False, default=argparse.SUPPRESS)\n\
-      _parser.add_argument(\"--pvc-name\", dest=\"pvc_name\", type=str, required=False,\
-      \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--pvc-size\", dest=\"pvc_size\"\
-      , type=str, required=False, default=argparse.SUPPRESS)\n_parser.add_argument(\"\
-      --cpus\", dest=\"cpus\", type=str, required=False, default=argparse.SUPPRESS)\n\
-      _parser.add_argument(\"--gpus\", dest=\"gpus\", type=int, required=False, default=argparse.SUPPRESS)\n\
-      _parser.add_argument(\"--memory\", dest=\"memory\", type=str, required=False,\
-      \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--model-dir\", dest=\"\
-      model_dir\", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)\n\
-      _parser.add_argument(\"----output-paths\", dest=\"_output_paths\", type=str,\
-      \ nargs=1)\n_parsed_args = vars(_parser.parse_args())\n_output_files = _parsed_args.pop(\"\
-      _output_paths\", [])\n\n_outputs = train_model_job(**_parsed_args)\n\n_output_serializers\
-      \ = [\n    _serialize_str,\n\n]\n\nimport os\nfor idx, output_file in enumerate(_output_files):\n\
-      \    try:\n        os.makedirs(os.path.dirname(output_file))\n    except OSError:\n\
-      \        pass\n    with open(output_file, 'w') as f:\n        f.write(_output_serializers[idx](_outputs[idx]))\n"
+    - |
+      def _make_parent_dirs_and_return_path(file_path: str):
+          import os
+          os.makedirs(os.path.dirname(file_path), exist_ok=True)
+          return file_path
+
+      def train_model_job(
+              dataset_directory,
+              train_specification,
+              train_parameters,
+              model_dir,
+              train_mount = "/train",
+              model_name = "my-model",
+              base_image = "quay.io/ibm/kubeflow-notebook-image-ppc64le:latest",
+              namespace = "",
+              node_selector = "",
+              pvc_name = "",
+              pvc_size = "10Gi",
+              cpus = "",
+              gpus = 0,
+              memory = "",
+              remote_host = "",
+              minio_url = "minio-service.kubeflow:9000",
+              minio_secret = "mlpipeline-minio-artifact",
+              upload_bucket = "jobdata"
+      ):
+          '''
+          Trains a model. Once trained, the model is persisted to model_dir.
+
+                  Parameters:
+                          dataset_directory: Path to the directory with training data.
+                          train_specification: Training command as generated from a Python function using kfp.components.func_to_component_text.
+                          train_parameters: Dictionary mapping formal to actual parameters for the training spacification.
+                          model_dir: Target path where the model will be stored.
+                          train_mount: Optional mounting point for training data of an existing PVC. Example: "/train".
+                          model_name: Optional name of the model. Must be unique for the targeted namespace and conform Kubernetes naming conventions. Example: my-model.
+                          base_image: Optional base image for model training. Example: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest.
+                          namespace: Optional namespace where the Job and associated volumes will be created. By default, the same namespace as where the pipeline is executed is chosen. Example: "user-example-com".
+                          node_selector: Optional node selector for worker nodes. Example: nvidia.com/gpu.product: "Tesla-V100-SXM2-32GB".
+                          pvc_name: Optional name to an existing persistent volume claim (pvc). If given, this pvc is mounted into the training job. Example: "music-genre-classification-j4ssf-training-pvc".
+                          pvc_size: Optional size of the storage during model training. Storage is mounted into to the Job based on a persitent volume claim of the given size. Example: 10Gi.
+                          cpus: Optional CPU limit for the job. Leave empty for cluster defaults (typically no limit). Example: "1000m".
+                          gpus: Optional number of GPUs for the job. Example: 2.
+                          memory: Optional memory limit for the job. Leave empty for cluster defaults (typically no limit). Example: "1Gi".
+                          remote_host: Optional remote kubernetes cluster to run the job in. Requires to have a suitable bearer token mounted from a secret to this component such that the environment variable TOKEN can be used. Example: "https://XXX.XXX.XXX.XXX:443".
+                          minio_url: Optional URL to MinIO object store. Username (MINIO_USER) and password (MINIO_PASS) have to be mounted via k8s_secret_key_to_env. Example: "minio-service.kubeflow:9000".
+                          upload_bucket: Optional bucket name when using MinIO for data synchronization. Example: "temp".
+          '''
+          from datetime import datetime
+          import errno
+          import json
+          import kfp
+          from kubernetes import (
+              client,
+              config,
+              utils,
+              watch
+          )
+          import logging
+          import os
+          import shutil
+          import sys
+          import yaml
+
+          logging.basicConfig(
+              stream=sys.stdout,
+              level=logging.INFO,
+              format='%(levelname)s %(asctime)s: %(message)s'
+          )
+          logger = logging.getLogger()
+
+          ###########################################################################
+          # Helper Functions
+          ###########################################################################
+          def establish_kubernetes_connection():
+              token = os.getenv('TOKEN')
+              if (token == "" or remote_host == ""):
+                  logger.info("Token and remote_host not set. Using in-cluster configuration...")
+                  config.load_incluster_config()
+                  api_client = client.ApiClient()
+                  is_remote = False
+                  if(not os.path.exists(train_mount)):
+                      logger.warning(f"No local mount to {train_mount} found. Therefore, switching to remote data synchronization mode via MinIO. This will work but is slower compared to local mounts. Consider adding a mount to '{train_mount}' for this component by using a PVC inside your pipeline.")
+                      is_remote = True
+              else:
+                  # see: https://github.com/kubernetes-client/python/blob/6d4587e18064288d031ed9bbf5ab5b8245460b3c/examples/remote_cluster.py
+                  logger.info("Token and remote_host found. Using remote cluster configuration...")
+                  configuration = client.Configuration()
+                  configuration.host = remote_host
+                  configuration.verify_ssl = False
+                  configuration.api_key = {"authorization": "Bearer " + token}
+                  api_client = client.ApiClient(configuration)
+                  is_remote = True
+
+              return (api_client, is_remote)
+
+          def clone_path(source, target):
+              try:
+                  logger.info(f"Cloning source path {source} to {target} of training job...")
+                  shutil.copytree(source, target)
+                  logger.info("Cloning finished. Target path contents:")
+                  logger.info(os.listdir(target))
+              except OSError as e:
+                  if e.errno in (errno.ENOTDIR, errno.EINVAL):
+                      shutil.copy(source, target)
+                  else:
+                      raise
+
+          def sync_with_minio(
+              inputs,
+              job_name,
+              upload_bucket,
+              minio_url,
+              is_upload,
+              remove_minio_files = False
+          ):
+              import json
+              import logging
+              from minio import Minio
+              import os
+              import sys
+              import tarfile
+
+              logging.basicConfig(
+                  stream=sys.stdout,
+                  level=logging.INFO,
+                  format='%(levelname)s %(asctime)s: %(message)s'
+              )
+              logger = logging.getLogger()
+
+              def establish_minio_connection(minio_url):
+                  minio_user = os.getenv('MINIO_USER')
+                  minio_pass = os.getenv('MINIO_PASS')
+
+                  if (minio_user == "" or minio_pass == ""):
+                      err = "Environment variables MINIO_USER and MINIO_PASS need externally to be provided to this component using k8s_secret_key_to_env!"
+                      logger.error(err)
+                      raise Exception(err)
+
+                  return Minio(
+                      minio_url,
+                      access_key=minio_user,
+                      secret_key=minio_pass,
+                      secure=False
+                  )
+
+              def path_to_tarfilename(pathname):
+                  return f"{pathname.replace(os.sep, '-')}.tar.gz"
+
+              def make_tarfile(output_filename, source_dir):
+                  with tarfile.open(output_filename, "w:gz") as tar:
+                      tar.add(source_dir, arcname='.')
+
+              def upload_to_minio(file, upload_bucket, job_name, minio_client):
+                  # Create models bucket if it does not yet exist
+                  response = minio_client.list_buckets()
+                  models_bucket_exists = False
+                  for bucket in response:
+                      if bucket.name == upload_bucket:
+                          models_bucket_exists = True
+
+                  if not models_bucket_exists:
+                      minio_client.make_bucket(bucket_name=upload_bucket)
+
+                  minio_client.fput_object(
+                      bucket_name=upload_bucket,  # bucket name in Minio
+                      object_name=f"{job_name}/{file}",  # file name in bucket of Minio
+                      file_path=file,  # file path / name in local system
+                  )
+
+              def download_from_minio(file, upload_bucket, job_name, minio_client, remove_minio_file):
+                  obj = f"{job_name}/{file}"
+                  data = minio_client.get_object(upload_bucket, obj)
+                  with open(file, 'wb') as file_data:
+                      for d in data.stream(32*1024):
+                          file_data.write(d)
+                  if remove_minio_file:
+                      minio_client.remove_object(upload_bucket, obj)
+
+              def extract_tarfile(tarfile_name, target):
+                  with tarfile.open(tarfile_name, "r:gz") as tar_gz_ref:
+                      tar_gz_ref.extractall(target)
+
+              logger.info("Establishing MinIO connection...")
+              minio_client = establish_minio_connection(minio_url)
+
+              if (isinstance(inputs, str)):
+                  inputs = json.loads(inputs)
+
+              if (isinstance(is_upload, str)):
+                  if (is_upload == "True"):
+                      is_upload = True
+                  else:
+                      is_upload = False
+
+              for (source, target) in inputs:
+                  tarfilename = path_to_tarfilename(source)
+
+                  if (is_upload):
+                      logger.info(f"Tar.gz input {source} into {tarfilename}...")
+                      make_tarfile(tarfilename, source)
+
+                      logger.info(f'Uploading {tarfilename} to {upload_bucket}/{job_name}/{tarfilename}...')
+                      upload_to_minio(tarfilename, upload_bucket, job_name, minio_client)
+                  else:
+                      logger.info(f'Downloading {upload_bucket}/{job_name}/{tarfilename} to {tarfilename}...')
+                      download_from_minio(tarfilename, upload_bucket, job_name, minio_client, remove_minio_files)
+
+                      logger.info(f'Extracting {tarfilename} to {target}...')
+                      extract_tarfile(tarfilename, target)
+
+                      logger.info('Result:')
+                      logger.info(os.listdir(target))
+
+          def generate_unique_job_name(model_name):
+              epoch = datetime.today().strftime('%Y%m%d%H%M%S')
+              return f"job-{model_name}-{epoch}"
+
+          def initialize_namespace(namespace):
+              SA_NAMESPACE = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
+              if namespace == "":
+                  with open(SA_NAMESPACE) as f:
+                      namespace = f.read()
+              namespace_spec = f"namespace: {namespace}"
+
+              return (namespace, namespace_spec)
+
+          def initialize_nodeselector(node_selector):
+              if node_selector != "":
+                  node_selector = f"nodeSelector:\n        {node_selector}"
+              return node_selector
+
+          def initialize_init_container(
+              is_remote,
+              base_image,
+              inputs,
+              job_name,
+              upload_bucket,
+              minio_url,
+              minio_secret,
+              mount_path
+          ):
+              if(not is_remote):
+                  return ""
+
+              command_specification = kfp.components.func_to_component_text(
+                  func=sync_with_minio
+              )
+
+              # inner components loose type information as needed by lists/dicts
+              # -> inputs need to be a string (using json here)
+              inputs_json = json.dumps(inputs)
+              parameters = {
+                  "inputs": inputs_json,
+                  "job_name": job_name,
+                  "upload_bucket": upload_bucket,
+                  "minio_url": minio_url,
+                  "is_upload": "False"
+              }
+
+              command, _, _ = initialize_command(
+                  command_specification,
+                  parameters
+              )
+
+              init_container = f"""initContainers:
+                - name: init-inputs
+                  image: {base_image}
+                  command: {command}
+                  volumeMounts:
+                  - mountPath: {mount_path}
+                    name: training
+                  env:
+                  - name: MINIO_USER
+                    valueFrom:
+                      secretKeyRef:
+                        name: {minio_secret}
+                        key: accesskey
+                        optional: false
+                  - name: MINIO_PASS
+                    valueFrom:
+                      secretKeyRef:
+                        name: {minio_secret}
+                        key: secretkey
+                        optional: false
+      """
+              return init_container
+
+          def initialize_command(
+              specification,
+              parameters,
+              path_parameters = {},
+              mount_path = "/tmp"
+          ):
+              component_yaml = yaml.safe_load(specification)
+              container_yaml = component_yaml["implementation"]["container"]
+              command = container_yaml["command"]
+              args = container_yaml["args"]
+
+              actual_args = list()
+              inputs = list()
+              outputs = list()
+              for idx, arg in enumerate(args):
+                  if type(arg) is dict:
+                      if "inputValue" in arg:
+                          # required parameter (value)
+                          key = arg["inputValue"]
+                          if key in parameters:
+                              actual_args.append(parameters[key])
+                          else:
+                              err = f"Required parameter '{key}' missing in component input!"
+                              logger.error(err)
+                              raise Exception(err)
+                      elif "if" in arg:
+                          # optional parameter
+                          key = arg["if"]["cond"]["isPresent"]
+                          if key in parameters:
+                              actual_args.append(f"--{key}")
+                              actual_args.append(parameters[key])
+                      elif "inputPath" in arg:
+                          # required InputPath
+                          key = arg["inputPath"]
+                          if key in parameters:
+                              path_key = parameters[key]
+                              if path_key in path_parameters:
+                                  mount = f"{mount_path}{path_parameters[path_key]}"
+                                  inputs.append((path_parameters[path_key], mount))
+                                  actual_args.append(mount)
+                              else:
+                                  err = f"InputPath '{path_key}' unavailable in training component!"
+                                  logger.error(err)
+                                  raise Exception(err)
+                          else:
+                              err = f"Required parameter '{key}' missing in component input!"
+                              logger.error(err)
+                              raise Exception(err)
+                      elif "outputPath" in arg:
+                          # required OutputPath
+                          key = arg["outputPath"]
+                          if key in parameters:
+                              path_key = parameters[key]
+                              if path_key in path_parameters:
+                                  mount = f"{mount_path}{path_parameters[path_key]}"
+                                  outputs.append((mount, path_parameters[path_key]))
+                                  actual_args.append(mount)
+                              else:
+                                  err = f"OutputPath '{path_key}' unavailable in training component!"
+                                  logger.error(err)
+                                  raise Exception(err)
+                          else:
+                              err = f"Required parameter '{key}' missing in component input!"
+                              logger.error(err)
+                              raise Exception(err)
+                  else:
+                      # required parameter (key)
+                      actual_args.append(arg)
+
+              command_with_initialized_args = json.dumps(command + actual_args)
+
+              return command_with_initialized_args, inputs, outputs
+
+          def initialize_fetch_command(
+              outputs,
+              job_name,
+              upload_bucket,
+              minio_url,
+          ):
+              command_specification = kfp.components.func_to_component_text(
+                  func=sync_with_minio
+              )
+
+              # inner components loose type information as needed by lists/dicts
+              # -> outputs need to be a string (using json here)
+              outputs_json = json.dumps(outputs)
+              parameters = {
+                  "inputs": outputs_json,
+                  "job_name": job_name,
+                  "upload_bucket": upload_bucket,
+                  "minio_url": minio_url,
+                  "is_upload": "True"
+              }
+              command, _, _ = initialize_command(
+                  command_specification,
+                  parameters
+              )
+              return command
+
+          def create_pvc_spec(pvc_name, namespace_spec, pvc_size):
+              pvc_spec = f"""apiVersion: batch/v1
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: {pvc_name}
+        {namespace_spec}
+      spec:
+        accessModes:
+        - ReadWriteMany
+        resources:
+          requests:
+            storage: {pvc_size}
+      """
+              return yaml.safe_load(pvc_spec)
+
+          def create_minio_secret_spec(namespace_spec, minio_secret):
+              minio_user = os.getenv('MINIO_USER')
+              minio_pass = os.getenv('MINIO_PASS')
+              minio_secret_spec = f"""apiVersion: v1
+      kind: Secret
+      metadata:
+        name: {minio_secret}
+        {namespace_spec}
+      stringData:
+        accesskey: {minio_user}
+        secretkey: {minio_pass}
+      """
+              return yaml.safe_load(minio_secret_spec)
+
+          def create_train_job_spec(
+              job_name,
+              namespace_spec,
+              node_selector,
+              base_image,
+              train_command,
+              train_mount,
+              cpus,
+              memory,
+              gpus,
+              init_container,
+              pvc_name
+          ):
+              if cpus:
+                  cpus = f"cpu: {cpus}"
+              if memory:
+                  memory = f"memory: {memory}"
+              if gpus:
+                  gpus = f"nvidia.com/gpu: {gpus}"
+
+              job_spec = f"""apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: {job_name}
+        {namespace_spec}
+      spec:
+        template:
+          metadata:
+            annotations:
+              sidecar.istio.io/inject: "false"
+          spec:
+            {node_selector}
+            containers:
+              - name: training-container
+                image: {base_image}
+                command: {train_command}
+                volumeMounts:
+                  - mountPath: {train_mount}
+                    name: training
+                restartPolicy: Never
+                resources:
+                  limits:
+                    {cpus}
+                    {memory}
+                    {gpus}
+            {init_container}
+            volumes:
+              - name: training
+                persistentVolumeClaim:
+                  claimName: {pvc_name}
+            restartPolicy: Never
+      """
+              return yaml.safe_load(job_spec)
+
+          def create_fetch_job_spec(
+              job_name,
+              namespace_spec,
+              base_image,
+              fetch_command,
+              train_mount,
+              minio_secret,
+              pvc_name
+          ):
+              job_spec = f"""apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: {job_name}
+        {namespace_spec}
+      spec:
+        template:
+          metadata:
+            annotations:
+              sidecar.istio.io/inject: "false"
+          spec:
+            containers:
+              - name: training-container
+                image: {base_image}
+                command: {fetch_command}
+                volumeMounts:
+                  - mountPath: {train_mount}
+                    name: training
+                restartPolicy: Never
+                env:
+                - name: MINIO_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: {minio_secret}
+                      key: accesskey
+                      optional: false
+                - name: MINIO_PASS
+                  valueFrom:
+                    secretKeyRef:
+                      name: {minio_secret}
+                      key: secretkey
+                      optional: false
+            volumes:
+              - name: training
+                persistentVolumeClaim:
+                  claimName: {pvc_name}
+            restartPolicy: Never
+      """
+              return yaml.safe_load(job_spec)
+
+          def submit_and_monitor_job(job_spec, namespace, api_client):
+              objects = utils.create_from_yaml(
+                  api_client,
+                  yaml_objects=[job_spec]
+              )
+              job_name = objects[0][0].metadata.name
+
+              logger.info("Waiting for job to succeed...")
+              job_watch = watch.Watch()
+              for job_event in job_watch.stream(
+                  batch_api.list_namespaced_job,
+                  namespace=namespace,
+                  label_selector=f"job-name={job_name}",
+                  timeout_seconds=0
+              ):
+                  job = job_event['object']
+                  if job.status.active and not job.status.failed:
+                      logger.info("Monitoring pods of job...")
+
+                      # See https://stackoverflow.com/questions/65938572/kubernetes-python-client-equivalent-of-kubectl-wait-for-command
+                      pod_watch = watch.Watch()
+                      for pod_event in pod_watch.stream(func=core_api.list_namespaced_pod,
+                                                namespace=namespace,
+                                                label_selector="controller-uid=" + job.metadata.labels["controller-uid"],
+                                                timeout_seconds=0):
+                          pod = pod_event["object"]
+                          pod_name = pod.metadata.name
+
+                          logger.info(f"Pod {pod_name} status: {pod.status.phase}")
+                          if pod.status.phase == "Running" or pod.status.phase == "Succeeded" or pod.status.phase == "Failed":
+                              logger.info("==============================================================================")
+                              logger.info("==============================================================================")
+                              logger.info(f"=== Streaming logs of pod {pod_name}...")
+                              logger.info("==============================================================================")
+                              logger.info("==============================================================================")
+
+                              log_watch = watch.Watch()
+                              for log_event in log_watch.stream(
+                                  core_api.read_namespaced_pod_log,
+                                  name=pod_name,
+                                  namespace=namespace,
+                                  follow=True,
+                                  _return_http_data_only=True,
+                                  _preload_content=False
+                              ):
+                                  print(log_event)
+                              logger.info("==============================================================================")
+                              logger.info("==============================================================================")
+
+                              pod_watch.stop()
+
+                              if pod.status.phase == "Failed":
+                                  err = "Job failed while executing."
+                                  logger.error(err)
+                                  raise Exception(err)
+                              break
+                          if pod_event["type"] == "DELETED":
+                              err = "Pod was deleted while we where waiting for it to start."
+                              logger.error(err)
+                              raise Exception(err)
+                  if job.status.succeeded:
+                      job_watch.stop()
+                      logger.info("Job finished.")
+                      break
+
+                  if not job.status.active and job.status.failed:
+                      job_watch.stop()
+                      logger.error("Job failed!")
+                      raise Exception("Job failed!")
+
+          ###########################################################################
+          # Main Workflow
+          ###########################################################################
+
+          logger.info("Establishing cluster connection...")
+          api_client, is_remote = establish_kubernetes_connection()
+          batch_api = client.BatchV1Api(api_client)
+          core_api = client.CoreV1Api(api_client)
+
+          logger.info("Initializing configurations...")
+          job_name = generate_unique_job_name(model_name)
+          if is_remote:
+              minio_secret = f"{job_name}-minio-secret"
+          namespace, namespace_spec = initialize_namespace(namespace)
+          pvc_name = f"{job_name}-pvc"
+          node_selector = initialize_nodeselector(node_selector)
+
+          path_parameters = {
+                  "dataset_directory": dataset_directory,
+                  "model_dir": model_dir
+              }
+          train_command, inputs, outputs = initialize_command(
+              train_specification,
+              train_parameters,
+              path_parameters,
+              train_mount
+          )
+          init_container = initialize_init_container(
+              is_remote,
+              base_image,
+              inputs,
+              job_name,
+              upload_bucket,
+              minio_url,
+              minio_secret,
+              train_mount
+          )
+
+          logger.info("=======================================")
+          logger.info("Derived configurations")
+          logger.info("=======================================")
+          logger.info(f"job_name: {job_name}")
+          logger.info(f"namespace: {namespace}")
+          logger.info(f"is_remote: {is_remote}")
+          logger.info(f"minio_url: {minio_url}")
+          logger.info(f"minio_secret: {minio_secret}")
+          logger.info("inputs (input paths send to job):")
+          for source, target in inputs:
+              logger.info(f"- {source} -> {upload_bucket}/{job_name}/{target}")
+          logger.info("outputs (output paths returning from job):")
+          for source, target in outputs:
+              logger.info(f"- {target} <- {upload_bucket}/{job_name}/{source}")
+          logger.info(f"train_command: {train_command}")
+          logger.info("=======================================")
+
+          if (is_remote):
+              logger.info("Using MinIO to sync data with a new remote PVC for the job...")
+              sync_with_minio(inputs, job_name, upload_bucket, minio_url, is_upload=True)
+              pvc_spec = create_pvc_spec(pvc_name, namespace_spec, pvc_size)
+              minio_secrets_spec = create_minio_secret_spec(namespace_spec, minio_secret)
+              utils.create_from_yaml(
+                  api_client,
+                  yaml_objects=[pvc_spec, minio_secrets_spec]
+              )
+          else:
+              logger.info(f"Pushing inputs to local {train_mount} mount as shared with job environment...")
+              for (source, target) in inputs:
+                  clone_path(source, target)
+
+          logger.info("Creating train job specification...")
+          train_job_spec = create_train_job_spec(
+              job_name,
+              namespace_spec,
+              node_selector,
+              base_image,
+              train_command,
+              train_mount,
+              cpus,
+              memory,
+              gpus,
+              init_container,
+              pvc_name
+          )
+
+          logger.info(f"Starting train job '{namespace}.{job_name}'...")
+          submit_and_monitor_job(train_job_spec, namespace, api_client)
+
+          logger.info("Receiving training outputs...")
+          if not os.path.exists(model_dir):
+              os.makedirs(model_dir)
+          if (is_remote):
+              fetch_command = initialize_fetch_command(
+                  outputs,
+                  job_name,
+                  upload_bucket,
+                  minio_url
+              )
+              fetch_job_name = f"{job_name}-fetch"
+
+              logger.info("Creating fetch job specification...")
+              fetch_job_spec = create_fetch_job_spec(
+                  fetch_job_name,
+                  namespace_spec,
+                  base_image,
+                  fetch_command,
+                  train_mount,
+                  minio_secret,
+                  pvc_name
+              )
+
+              logger.info(f"Starting fetch job '{namespace}.{fetch_job_name}'...")
+              submit_and_monitor_job(fetch_job_spec, namespace, api_client)
+
+              logger.info("Fetching output data from MinIO & deleting it afterwards...")
+              sync_with_minio(outputs, job_name, upload_bucket, minio_url, is_upload=False, remove_minio_files=True)
+
+              logger.info(f"Deleting Job {fetch_job_name}...")
+              batch_api.delete_namespaced_job(fetch_job_name, namespace)
+          else:
+              logger.info(f"Fetching outputs to local {train_mount} mount as shared with job environment...")
+              for (source, target) in outputs:
+                  clone_path(source, target)
+
+          logger.info(f"Deleting Job {job_name}...")
+          batch_api.delete_namespaced_job(job_name, namespace)
+          if (is_remote):
+              logger.info(f"Deleting remote PVC {pvc_name}...")
+              core_api.delete_namespaced_persistent_volume_claim(pvc_name, namespace)
+
+              logger.info(f"Deleting remote MinIO secret {minio_secret}...")
+              core_api.delete_namespaced_secret(minio_secret, namespace)
+
+          logger.info("Finished.")
+
+      import json
+      import argparse
+      _parser = argparse.ArgumentParser(prog='Train model job', description='Trains a model. Once trained, the model is persisted to model_dir.')
+      _parser.add_argument("--dataset-directory", dest="dataset_directory", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--train-specification", dest="train_specification", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--train-parameters", dest="train_parameters", type=json.loads, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--train-mount", dest="train_mount", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--model-name", dest="model_name", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--base-image", dest="base_image", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--namespace", dest="namespace", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--node-selector", dest="node_selector", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--pvc-name", dest="pvc_name", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--pvc-size", dest="pvc_size", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--cpus", dest="cpus", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--gpus", dest="gpus", type=int, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--memory", dest="memory", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--remote-host", dest="remote_host", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--minio-url", dest="minio_url", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--minio-secret", dest="minio_secret", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--upload-bucket", dest="upload_bucket", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--model-dir", dest="model_dir", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
+      _parsed_args = vars(_parser.parse_args())
+
+      _outputs = train_model_job(**_parsed_args)
     args:
     - --dataset-directory
     - {inputPath: dataset_directory}
@@ -251,11 +840,6 @@ implementation:
         - --node-selector
         - {inputValue: node_selector}
     - if:
-        cond: {isPresent: remote_host}
-        then:
-        - --remote-host
-        - {inputValue: remote_host}
-    - if:
         cond: {isPresent: pvc_name}
         then:
         - --pvc-name
@@ -280,7 +864,25 @@ implementation:
         then:
         - --memory
         - {inputValue: memory}
+    - if:
+        cond: {isPresent: remote_host}
+        then:
+        - --remote-host
+        - {inputValue: remote_host}
+    - if:
+        cond: {isPresent: minio_url}
+        then:
+        - --minio-url
+        - {inputValue: minio_url}
+    - if:
+        cond: {isPresent: minio_secret}
+        then:
+        - --minio-secret
+        - {inputValue: minio_secret}
+    - if:
+        cond: {isPresent: upload_bucket}
+        then:
+        - --upload-bucket
+        - {inputValue: upload_bucket}
     - --model-dir
     - {outputPath: model_dir}
-    - '----output-paths'
-    - {outputPath: logs}
