@@ -132,13 +132,41 @@ implementation:
           ###########################################################################
           # Helper Functions
           ###########################################################################
+
           def establish_kubernetes_connection():
-              token = os.getenv('TOKEN')
+              def get_remote_cluster_token(api_client):
+                  from kubernetes.client.rest import ApiException
+                  import base64
+                  try:
+                      secret = client.CoreV1Api(api_client).read_namespaced_secret("remote-cluster", get_current_namespace())
+                      token = secret.data['token']
+                      decoded_token = base64.b64decode(token)
+                      return decoded_token.decode('utf-8')
+                  except ApiException as e:
+                      if e.status == 404:
+                          return ""
+
+              config.load_incluster_config()
+              local_api_client = client.ApiClient()
+              token = get_remote_cluster_token(local_api_client)
+
+              is_remote = False
               if (token == "" or remote_host == ""):
                   logger.info("Token and remote_host not set. Using in-cluster configuration...")
-                  config.load_incluster_config()
-                  api_client = client.ApiClient()
-                  is_remote = False
+                  logger.info("Note: set 'remote_host' as a pipeline argument and configure a token by adding a 'remote-cluster' secret with a 'token' data entry to your user namespace.")
+                  logger.info("Example:")
+                  logger.info("---")
+                  logger.info("apiVersion: v1")
+                  logger.info("kind: Secret")
+                  logger.info("metadata:")
+                  logger.info("  name: remote-cluster")
+                  logger.info("stringData:")
+                  logger.info("  token: eyJh...")
+                  logger.info("---")
+                  logger.info("Where you get the token from your remote cluster as described here:")
+                  logger.info("https://kubernetes.io/docs/tasks/access-application-cluster/access-cluster/#without-kubectl-proxy")
+
+                  api_client = local_api_client
                   if(not os.path.exists(train_mount)):
                       logger.warning(f"No local mount to {train_mount} found. Therefore, switching to remote data synchronization mode via MinIO. This will work but is slower compared to local mounts. Consider adding a mount to '{train_mount}' for this component by using a PVC inside your pipeline.")
                       is_remote = True
@@ -276,12 +304,14 @@ implementation:
               epoch = datetime.today().strftime('%Y%m%d%H%M%S')
               return f"job-{model_name}-{epoch}"
 
-          def initialize_namespace(namespace):
+          def get_current_namespace():
               SA_NAMESPACE = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+              with open(SA_NAMESPACE) as f:
+                  return f.read()
 
+          def initialize_namespace(namespace):
               if namespace == "":
-                  with open(SA_NAMESPACE) as f:
-                      namespace = f.read()
+                  namespace = get_current_namespace()
               namespace_spec = f"namespace: {namespace}"
 
               return (namespace, namespace_spec)
@@ -491,10 +521,18 @@ implementation:
           ):
               if cpus:
                   cpus = f"cpu: {cpus}"
+              else:
+                  cpus = ""
+
               if memory:
                   memory = f"memory: {memory}"
+              else:
+                  memory = ""
+
               if gpus:
                   gpus = f"nvidia.com/gpu: {gpus}"
+              else:
+                  gpus = ""
 
               job_spec = f"""apiVersion: batch/v1
       kind: Job
