@@ -3,8 +3,7 @@ description: Uploads a model file to MinIO artifact store.
 inputs:
 - {name: file_dir, type: String}
 - {name: minio_url, type: String}
-- {name: minio_user, type: String}
-- {name: minio_pass, type: String}
+- {name: minio_secret, type: String, default: mlpipeline-minio-artifact, optional: true}
 - {name: export_bucket, type: String, default: models, optional: true}
 - {name: model_name, type: String, default: my-model, optional: true}
 - {name: model_version, type: Integer, default: '1', optional: true}
@@ -26,8 +25,7 @@ implementation:
       def upload_model(
           file_dir,
           minio_url,
-          minio_user,
-          minio_pass,
+          minio_secret = "mlpipeline-minio-artifact",
           export_bucket = "models",
           model_name = "my-model",
           model_version = 1,
@@ -35,8 +33,12 @@ implementation:
       ):
           """Uploads a model file to MinIO artifact store."""
 
-          import logging
           from collections import namedtuple
+          from kubernetes import (
+              client,
+              config
+          )
+          import logging
           from minio import Minio
           import sys
 
@@ -47,11 +49,38 @@ implementation:
           )
           logger = logging.getLogger()
 
-          logger.info(f"Establishing MinIO connection to '{minio_url}'...")
-          minio_client = Minio(minio_url,
+          def get_minio_client(minio_secret):
+              import base64
+              from kubernetes.client.rest import ApiException
+
+              def get_current_namespace():
+                  SA_NAMESPACE = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+                  with open(SA_NAMESPACE) as f:
+                      return f.read()
+
+              def decode(text):
+                  return base64.b64decode(text).decode('utf-8')
+
+              config.load_incluster_config()
+              api_client = client.ApiClient()
+
+              try:
+                  secret = client.CoreV1Api(api_client).read_namespaced_secret(minio_secret, get_current_namespace())
+
+                  minio_user = decode(secret.data['accesskey'])
+                  minio_pass = decode(secret.data['secretkey'])
+
+                  return Minio(minio_url,
                                access_key=minio_user,
                                secret_key=minio_pass,
                                secure=False)
+              except ApiException as e:
+                  if e.status == 404:
+                      logger.error("Failed to get secret 'mlpipeline-minio-artifact', which is needed for communicating with MinIO!")
+                  raise Exception(e)
+
+          logger.info(f"Establishing MinIO connection to '{minio_url}'...")
+          minio_client = get_minio_client(minio_secret)
 
           # Create export bucket if it does not yet exist
           response = minio_client.list_buckets()
@@ -89,8 +118,7 @@ implementation:
       _parser = argparse.ArgumentParser(prog='Upload model', description='Uploads a model file to MinIO artifact store.')
       _parser.add_argument("--file-dir", dest="file_dir", type=str, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--minio-url", dest="minio_url", type=str, required=True, default=argparse.SUPPRESS)
-      _parser.add_argument("--minio-user", dest="minio_user", type=str, required=True, default=argparse.SUPPRESS)
-      _parser.add_argument("--minio-pass", dest="minio_pass", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--minio-secret", dest="minio_secret", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--export-bucket", dest="export_bucket", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--model-name", dest="model_name", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--model-version", dest="model_version", type=int, required=False, default=argparse.SUPPRESS)
@@ -120,10 +148,11 @@ implementation:
     - {inputPath: file_dir}
     - --minio-url
     - {inputValue: minio_url}
-    - --minio-user
-    - {inputValue: minio_user}
-    - --minio-pass
-    - {inputValue: minio_pass}
+    - if:
+        cond: {isPresent: minio_secret}
+        then:
+        - --minio-secret
+        - {inputValue: minio_secret}
     - if:
         cond: {isPresent: export_bucket}
         then:

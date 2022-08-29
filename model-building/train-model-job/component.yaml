@@ -135,8 +135,8 @@ implementation:
 
           def establish_kubernetes_connection():
               def get_remote_cluster_token(api_client):
-                  from kubernetes.client.rest import ApiException
                   import base64
+                  from kubernetes.client.rest import ApiException
                   try:
                       secret = client.CoreV1Api(api_client).read_namespaced_secret("remote-cluster", get_current_namespace())
                       token = secret.data['token']
@@ -180,7 +180,7 @@ implementation:
                   api_client = client.ApiClient(configuration)
                   is_remote = True
 
-              return (api_client, is_remote)
+              return (api_client, is_remote, local_api_client)
 
           def clone_path(source, target):
               try:
@@ -193,6 +193,23 @@ implementation:
                       shutil.copy(source, target)
                   else:
                       raise
+
+          def initialize_minio_credentials(api_client, minio_secret):
+              import base64
+              from kubernetes.client.rest import ApiException
+              import os
+
+              def decode(text):
+                  return base64.b64decode(text).decode('utf-8')
+
+              try:
+                  secret = client.CoreV1Api(api_client).read_namespaced_secret(minio_secret, get_current_namespace())
+                  os.environ["MINIO_USER"] = decode(secret.data['accesskey'])
+                  os.environ["MINIO_PASS"] = decode(secret.data['secretkey'])
+              except ApiException as e:
+                  if e.status == 404:
+                      logger.error("Failed to get secret 'mlpipeline-minio-artifact', which is needed for communicating with MinIO!")
+                  raise Exception(e)
 
           def sync_with_minio(
               inputs,
@@ -692,14 +709,17 @@ implementation:
           ###########################################################################
 
           logger.info("Establishing cluster connection...")
-          api_client, is_remote = establish_kubernetes_connection()
+          api_client, is_remote, local_api_client = establish_kubernetes_connection()
           batch_api = client.BatchV1Api(api_client)
           core_api = client.CoreV1Api(api_client)
+
+          logger.info("Initializing MinIO credentials...")
+          initialize_minio_credentials(local_api_client, minio_secret)
 
           logger.info("Initializing configurations...")
           job_name = generate_unique_job_name(model_name)
           if is_remote:
-              minio_secret = f"{job_name}-minio-secret"
+              remote_minio_secret = f"{job_name}-minio-secret"
           namespace, namespace_spec = initialize_namespace(namespace)
           pvc_name = f"{job_name}-pvc"
           node_selector = initialize_nodeselector(node_selector)
@@ -721,7 +741,7 @@ implementation:
               job_name,
               upload_bucket,
               minio_url,
-              minio_secret,
+              remote_minio_secret,
               train_mount
           )
 
@@ -733,6 +753,7 @@ implementation:
           logger.info(f"is_remote: {is_remote}")
           logger.info(f"minio_url: {minio_url}")
           logger.info(f"minio_secret: {minio_secret}")
+          logger.info(f"remote_minio_secret: {remote_minio_secret}")
           logger.info("inputs (input paths send to job):")
           for source, target in inputs:
               logger.info(f"- {source} -> {upload_bucket}/{job_name}/{target}")
@@ -746,7 +767,7 @@ implementation:
               logger.info("Using MinIO to sync data with a new remote PVC for the job...")
               sync_with_minio(inputs, job_name, upload_bucket, minio_url, is_upload=True)
               pvc_spec = create_pvc_spec(pvc_name, namespace_spec, pvc_size)
-              minio_secrets_spec = create_minio_secret_spec(namespace_spec, minio_secret)
+              minio_secrets_spec = create_minio_secret_spec(namespace_spec, remote_minio_secret)
               utils.create_from_yaml(
                   api_client,
                   yaml_objects=[pvc_spec, minio_secrets_spec]
@@ -793,7 +814,7 @@ implementation:
                   base_image,
                   fetch_command,
                   train_mount,
-                  minio_secret,
+                  remote_minio_secret,
                   pvc_name
               )
 
@@ -816,8 +837,8 @@ implementation:
               logger.info(f"Deleting remote PVC {pvc_name}...")
               core_api.delete_namespaced_persistent_volume_claim(pvc_name, namespace)
 
-              logger.info(f"Deleting remote MinIO secret {minio_secret}...")
-              core_api.delete_namespaced_secret(minio_secret, namespace)
+              logger.info(f"Deleting remote MinIO secret {remote_minio_secret}...")
+              core_api.delete_namespaced_secret(remote_minio_secret, namespace)
 
           logger.info("Finished.")
 
