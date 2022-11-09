@@ -2,7 +2,7 @@ name: Upload model
 description: Uploads a model file to MinIO artifact store.
 inputs:
 - {name: file_dir, type: String}
-- {name: minio_url, type: String}
+- {name: minio_url, type: String, default: 'minio-service.kubeflow:9000', optional: true}
 - {name: minio_secret, type: String, default: mlpipeline-minio-artifact, optional: true}
 - {name: export_bucket, type: String, default: models, optional: true}
 - {name: model_name, type: String, default: my-model, optional: true}
@@ -24,7 +24,7 @@ implementation:
     - |
       def upload_model(
           file_dir,
-          minio_url,
+          minio_url = "minio-service.kubeflow:9000",
           minio_secret = "mlpipeline-minio-artifact",
           export_bucket = "models",
           model_name = "my-model",
@@ -117,7 +117,7 @@ implementation:
       import argparse
       _parser = argparse.ArgumentParser(prog='Upload model', description='Uploads a model file to MinIO artifact store.')
       _parser.add_argument("--file-dir", dest="file_dir", type=str, required=True, default=argparse.SUPPRESS)
-      _parser.add_argument("--minio-url", dest="minio_url", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--minio-url", dest="minio_url", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--minio-secret", dest="minio_secret", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--export-bucket", dest="export_bucket", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--model-name", dest="model_name", type=str, required=False, default=argparse.SUPPRESS)
@@ -146,8 +146,11 @@ implementation:
     args:
     - --file-dir
     - {inputPath: file_dir}
-    - --minio-url
-    - {inputValue: minio_url}
+    - if:
+        cond: {isPresent: minio_url}
+        then:
+        - --minio-url
+        - {inputValue: minio_url}
     - if:
         cond: {isPresent: minio_secret}
         then:

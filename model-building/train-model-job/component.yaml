@@ -15,9 +15,6 @@ inputs:
 - {name: base_image, type: String, description: 'Optional base image for model training.
     Example: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest.', default: 'quay.io/ibm/kubeflow-notebook-image-ppc64le:latest',
   optional: true}
-- {name: namespace, type: String, description: 'Optional namespace where the Job and
-    associated volumes will be created. By default, the same namespace as where the
-    pipeline is executed is chosen. Example: "user-example-com".', default: '', optional: true}
 - {name: node_selector, type: String, description: 'Optional node selector for worker
     nodes. Example: nvidia.com/gpu.product: "Tesla-V100-SXM2-32GB".', default: '',
   optional: true}
@@ -34,17 +31,12 @@ inputs:
 - {name: memory, type: String, description: 'Optional memory limit for the job. Leave
     empty for cluster defaults (typically no limit). Example: "1Gi".', default: '',
   optional: true}
-- {name: remote_host, type: String, description: 'Optional remote kubernetes cluster
-    to run the job in. Requires to have a suitable bearer token mounted from a secret
-    to this component such that the environment variable TOKEN can be used. Example:
-    "https://XXX.XXX.XXX.XXX:443".', default: '', optional: true}
-- {name: minio_url, type: String, description: 'Optional URL to MinIO object store.
-    Username (MINIO_USER) and password (MINIO_PASS) have to be mounted via k8s_secret_key_to_env.
-    Example: "minio-service.kubeflow:9000".', default: 'minio-service.kubeflow:9000',
-  optional: true}
-- {name: minio_secret, type: String, default: mlpipeline-minio-artifact, optional: true}
-- {name: upload_bucket, type: String, description: 'Optional bucket name when using
-    MinIO for data synchronization. Example: "temp".', default: jobdata, optional: true}
+- {name: cluster_configuration_secret, type: String, description: 'Optional secret
+    name configuring a (remote) Kubernetes cluster to run the job in and the backing
+    MinIO object store. All secret''s data values are optional and appropriate defaults
+    are chosen if not present. The secret may provide a suitable kubernetes bearer
+    token, the associated namespace, a host, etc. Example: "remote-power-cluster".',
+  default: '', optional: true}
 outputs:
 - {name: model_dir, type: String, description: Target path where the model will be
     stored.}
@@ -72,17 +64,13 @@ implementation:
               train_mount = "/train",
               model_name = "my-model",
               base_image = "quay.io/ibm/kubeflow-notebook-image-ppc64le:latest",
-              namespace = "",
               node_selector = "",
               pvc_name = "",
               pvc_size = "10Gi",
               cpus = "",
               gpus = 0,
               memory = "",
-              remote_host = "",
-              minio_url = "minio-service.kubeflow:9000",
-              minio_secret = "mlpipeline-minio-artifact",
-              upload_bucket = "jobdata"
+              cluster_configuration_secret = "",
       ):
           '''
           Trains a model. Once trained, the model is persisted to model_dir.
@@ -95,16 +83,13 @@ implementation:
                           train_mount: Optional mounting point for training data of an existing PVC. Example: "/train".
                           model_name: Optional name of the model. Must be unique for the targeted namespace and conform Kubernetes naming conventions. Example: my-model.
                           base_image: Optional base image for model training. Example: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest.
-                          namespace: Optional namespace where the Job and associated volumes will be created. By default, the same namespace as where the pipeline is executed is chosen. Example: "user-example-com".
                           node_selector: Optional node selector for worker nodes. Example: nvidia.com/gpu.product: "Tesla-V100-SXM2-32GB".
                           pvc_name: Optional name to an existing persistent volume claim (pvc). If given, this pvc is mounted into the training job. Example: "music-genre-classification-j4ssf-training-pvc".
                           pvc_size: Optional size of the storage during model training. Storage is mounted into to the Job based on a persitent volume claim of the given size. Example: 10Gi.
                           cpus: Optional CPU limit for the job. Leave empty for cluster defaults (typically no limit). Example: "1000m".
                           gpus: Optional number of GPUs for the job. Example: 2.
                           memory: Optional memory limit for the job. Leave empty for cluster defaults (typically no limit). Example: "1Gi".
-                          remote_host: Optional remote kubernetes cluster to run the job in. Requires to have a suitable bearer token mounted from a secret to this component such that the environment variable TOKEN can be used. Example: "https://XXX.XXX.XXX.XXX:443".
-                          minio_url: Optional URL to MinIO object store. Username (MINIO_USER) and password (MINIO_PASS) have to be mounted via k8s_secret_key_to_env. Example: "minio-service.kubeflow:9000".
-                          upload_bucket: Optional bucket name when using MinIO for data synchronization. Example: "temp".
+                          cluster_configuration_secret: Optional secret name configuring a (remote) Kubernetes cluster to run the job in and the backing MinIO object store. All secret's data values are optional and appropriate defaults are chosen if not present. The secret may provide a suitable kubernetes bearer token, the associated namespace, a host, etc. Example: "remote-power-cluster".
           '''
           from datetime import datetime
           import errno
@@ -133,37 +118,98 @@ implementation:
           # Helper Functions
           ###########################################################################
 
-          def establish_kubernetes_connection():
-              def get_remote_cluster_token(api_client):
-                  import base64
-                  from kubernetes.client.rest import ApiException
-                  try:
-                      secret = client.CoreV1Api(api_client).read_namespaced_secret("remote-cluster", get_current_namespace())
-                      token = secret.data['token']
-                      decoded_token = base64.b64decode(token)
-                      return decoded_token.decode('utf-8')
-                  except ApiException as e:
-                      if e.status == 404:
-                          return ""
-
+          def establish_local_cluster_connection():
               config.load_incluster_config()
-              local_api_client = client.ApiClient()
-              token = get_remote_cluster_token(local_api_client)
+              return client.ApiClient()
 
+          def get_cluster_configuration(api_client, cluster_configuration_secret):
+              import base64
+              from kubernetes.client.rest import ApiException
+
+              def decode(secret, key):
+                  data = secret.data[key]
+                  decoded_data = base64.b64decode(data)
+                  return decoded_data.decode('utf-8')
+
+              def update_with_secret(secret, dictionary):
+                  for key in dictionary:
+                      if key in secret.data:
+                          dictionary[key] = decode(secret, key)
+
+              cluster_configuration = {
+                  "access-mode": "ReadWriteMany",
+                  "minio-accesskey": "minio",
+                  "minio-bucket": "mlpipeline",
+                  "minio-job-folder": "jobs",
+                  "minio-secretkey": "minio123",
+                  "minio-url": "http://minio-service.kubeflow:9000",
+                  "remote-host": "",
+                  "remote-namespace": "",
+                  "remote-token": "",
+              }
+
+              try:
+                  default_minio_secret = client.CoreV1Api(api_client).read_namespaced_secret(
+                      "mlpipeline-minio-artifact",
+                      get_current_namespace()
+                  )
+
+                  if default_minio_secret.data is None:
+                      logger.info("MinIO secret (mlpipeline-minio-artifact) includes no data - progressing with default values.")
+                  else:
+                      logger.info("Found default MinIO secret (mlpipeline-minio-artifact) - updating cluster configuration accordingly.")
+                      cluster_configuration["minio-accesskey"] = decode(default_minio_secret, "accesskey")
+                      cluster_configuration["minio-secretkey"] = decode(default_minio_secret, "secretkey")
+              except ApiException as e:
+                  if e.status == 404:
+                      logger.info("Found no default MinIO secret (mlpipeline-minio-artifact) - progressing with default values.")
+
+              if cluster_configuration_secret == "":
+                  logger.info("No cluster configuration secret specified - progressing with default values.")
+                  return cluster_configuration
+
+              try:
+                  secret = client.CoreV1Api(api_client).read_namespaced_secret(
+                      cluster_configuration_secret,
+                      get_current_namespace()
+                  )
+                  if secret.data is None:
+                      logger.info(f"Cluster configuration secret ({cluster_configuration_secret}) includes no data - progressing with default values.")
+                  else:
+                      logger.info(f"Found cluster configuration secret ({cluster_configuration_secret}) - updating cluster configuration accordingly.")
+                      update_with_secret(secret, cluster_configuration)
+              except ApiException as e:
+                  if e.status == 404:
+                      logger.info(f"Found no cluster configuration secret ({cluster_configuration_secret}) - progressing with default values.")
+
+              return cluster_configuration
+
+          def establish_training_cluster_connection(local_api_client, cluster_configuration):
               is_remote = False
-              if (token == "" or remote_host == ""):
-                  logger.info("Token and remote_host not set. Using in-cluster configuration...")
-                  logger.info("Note: set 'remote_host' as a pipeline argument and configure a token by adding a 'remote-cluster' secret with a 'token' data entry to your user namespace.")
-                  logger.info("Example:")
+              if (
+                  cluster_configuration["remote-host"] == "" or
+                  cluster_configuration["remote-token"] == ""
+              ):
+                  logger.info("Remote cluster not configured. Using in-cluster configuration...")
+                  logger.info("Note: assign the name of a secret to the 'cluster_configuration_secret' pipeline argument and add the secret to your cluster.")
+                  logger.info("Example secret:")
                   logger.info("---")
                   logger.info("apiVersion: v1")
                   logger.info("kind: Secret")
                   logger.info("metadata:")
-                  logger.info("  name: remote-cluster")
+                  logger.info("  name: my-remote-cluster")
                   logger.info("stringData:")
-                  logger.info("  token: eyJh...")
+                  logger.info("  access-mode: ReadWriteOnce")
+                  logger.info("  minio-accesskey: minio")
+                  logger.info("  minio-bucket: mlpipeline")
+                  logger.info("  minio-job-folder: jobs")
+                  logger.info("  minio-secretkey: minio123")
+                  logger.info("  minio-url: http://minio-service.kubeflow:9000")
+                  logger.info("  remote-host: https://istio-ingressgateway-istio-system.apps.mydomain.ai:6443")
+                  logger.info("  remote-namespace: default")
+                  logger.info("  remote-token: eyJh...")
                   logger.info("---")
-                  logger.info("Where you get the token from your remote cluster as described here:")
+                  logger.info("Where you get the remote-token from your remote cluster as described here:")
                   logger.info("https://kubernetes.io/docs/tasks/access-application-cluster/access-cluster/#without-kubectl-proxy")
 
                   api_client = local_api_client
@@ -172,15 +218,17 @@ implementation:
                       is_remote = True
               else:
                   # see: https://github.com/kubernetes-client/python/blob/6d4587e18064288d031ed9bbf5ab5b8245460b3c/examples/remote_cluster.py
-                  logger.info("Token and remote_host found. Using remote cluster configuration...")
+                  logger.info("Remote host and token found. Using remote cluster configuration...")
                   configuration = client.Configuration()
-                  configuration.host = remote_host
+                  configuration.host = cluster_configuration["remote-host"]
                   configuration.verify_ssl = False
-                  configuration.api_key = {"authorization": "Bearer " + token}
+                  configuration.api_key = {
+                      "authorization": "Bearer " + cluster_configuration["remote-token"]
+                  }
                   api_client = client.ApiClient(configuration)
                   is_remote = True
 
-              return (api_client, is_remote, local_api_client)
+              return (api_client, is_remote)
 
           def clone_path(source, target):
               try:
@@ -194,34 +242,28 @@ implementation:
                   else:
                       raise
 
-          def initialize_minio_credentials(api_client, minio_secret):
-              import base64
-              from kubernetes.client.rest import ApiException
-              import os
-
-              def decode(text):
-                  return base64.b64decode(text).decode('utf-8')
-
-              try:
-                  secret = client.CoreV1Api(api_client).read_namespaced_secret(minio_secret, get_current_namespace())
-                  os.environ["MINIO_USER"] = decode(secret.data['accesskey'])
-                  os.environ["MINIO_PASS"] = decode(secret.data['secretkey'])
-              except ApiException as e:
-                  if e.status == 404:
-                      logger.error("Failed to get secret 'mlpipeline-minio-artifact', which is needed for communicating with MinIO!")
-                  raise Exception(e)
-
           def sync_with_minio(
+              cluster_configuration,
               inputs,
               job_name,
-              upload_bucket,
-              minio_url,
               is_upload,
               remove_minio_files = False
           ):
+              import pip
+
+              def install(package):
+                  if hasattr(pip, 'main'):
+                      pip.main(['install', package])
+                  else:
+                      pip._internal.main(['install', package])
+
+              install("boto3")
+
+              import boto3
+              import botocore
+              from botocore.client import Config
               import json
               import logging
-              from minio import Minio
               import os
               import sys
               import tarfile
@@ -233,20 +275,25 @@ implementation:
               )
               logger = logging.getLogger()
 
-              def establish_minio_connection(minio_url):
-                  minio_user = os.getenv('MINIO_USER')
-                  minio_pass = os.getenv('MINIO_PASS')
+              def establish_minio_connection(cluster_configuration):
+                  if ("minio-accesskey" in cluster_configuration) and ("minio-secretkey" in cluster_configuration):
+                      minio_user = cluster_configuration["minio-accesskey"]
+                      minio_pass = cluster_configuration["minio-secretkey"]
+                  else:
+                      minio_user = os.getenv('MINIO_USER')
+                      minio_pass = os.getenv('MINIO_PASS')
 
                   if (minio_user == "" or minio_pass == ""):
                       err = "Environment variables MINIO_USER and MINIO_PASS need externally to be provided to this component using k8s_secret_key_to_env!"
                       logger.error(err)
                       raise Exception(err)
 
-                  return Minio(
-                      minio_url,
-                      access_key=minio_user,
-                      secret_key=minio_pass,
-                      secure=False
+                  return boto3.session.Session().resource(
+                      service_name="s3",
+                      endpoint_url=cluster_configuration["minio-url"],
+                      aws_access_key_id=minio_user,
+                      aws_secret_access_key=minio_pass,
+                      config=Config(signature_version="s3v4"),
                   )
 
               def path_to_tarfilename(pathname):
@@ -256,38 +303,45 @@ implementation:
                   with tarfile.open(output_filename, "w:gz") as tar:
                       tar.add(source_dir, arcname='.')
 
-              def upload_to_minio(file, upload_bucket, job_name, minio_client):
-                  # Create models bucket if it does not yet exist
-                  response = minio_client.list_buckets()
-                  models_bucket_exists = False
-                  for bucket in response:
-                      if bucket.name == upload_bucket:
-                          models_bucket_exists = True
+              # see: https://stackoverflow.com/a/47565719/2625096
+              def bucket_exists(minio_client, bucket):
+                  try:
+                      minio_client.meta.client.head_bucket(Bucket=bucket.name)
+                      return True
+                  except botocore.exceptions.ClientError as e:
+                      error_code = int(e.response['Error']['Code'])
+                      if error_code == 403:
+                          # Forbidden Access -> Private Bucket
+                          return True
+                      elif error_code == 404:
+                          return False
 
-                  if not models_bucket_exists:
-                      minio_client.make_bucket(bucket_name=upload_bucket)
+              def upload_to_minio(file, upload_bucket, job_folder, job_name, minio_client):
+                  bucket = minio_client.Bucket(upload_bucket)
 
-                  minio_client.fput_object(
-                      bucket_name=upload_bucket,  # bucket name in Minio
-                      object_name=f"{job_name}/{file}",  # file name in bucket of Minio
-                      file_path=file,  # file path / name in local system
+                  if not bucket_exists(minio_client, bucket):
+                      minio_client.create_bucket(Bucket=bucket.name)
+
+                  bucket.upload_file(
+                      file,
+                      f"{job_folder}/{job_name}/{file}"
                   )
 
-              def download_from_minio(file, upload_bucket, job_name, minio_client, remove_minio_file):
-                  obj = f"{job_name}/{file}"
-                  data = minio_client.get_object(upload_bucket, obj)
-                  with open(file, 'wb') as file_data:
-                      for d in data.stream(32*1024):
-                          file_data.write(d)
+              def download_from_minio(file, upload_bucket, job_folder, job_name, minio_client, remove_minio_file):
+                  bucket = minio_client.Bucket(upload_bucket)
+                  key = f"{job_folder}/{job_name}/{file}"
+
+                  bucket.download_file(key, file)
+
                   if remove_minio_file:
-                      minio_client.remove_object(upload_bucket, obj)
+                      bucket.Object(key).delete()
 
               def extract_tarfile(tarfile_name, target):
                   with tarfile.open(tarfile_name, "r:gz") as tar_gz_ref:
                       tar_gz_ref.extractall(target)
 
-              logger.info("Establishing MinIO connection...")
-              minio_client = establish_minio_connection(minio_url)
+              if (isinstance(cluster_configuration, str)):
+                  cluster_configuration = json.loads(cluster_configuration)
 
               if (isinstance(inputs, str)):
                   inputs = json.loads(inputs)
@@ -298,6 +352,9 @@ implementation:
                   else:
                       is_upload = False
 
+              logger.info("Establishing MinIO connection...")
+              minio_client = establish_minio_connection(cluster_configuration)
+
               for (source, target) in inputs:
                   tarfilename = path_to_tarfilename(source)
 
@@ -305,11 +362,11 @@ implementation:
                       logger.info(f"Tar.gz input {source} into {tarfilename}...")
                       make_tarfile(tarfilename, source)
 
-                      logger.info(f'Uploading {tarfilename} to {upload_bucket}/{job_name}/{tarfilename}...')
-                      upload_to_minio(tarfilename, upload_bucket, job_name, minio_client)
+                      logger.info(f'Uploading {tarfilename} to {cluster_configuration["minio-bucket"]}/{cluster_configuration["minio-job-folder"]}/{job_name}/{tarfilename}...')
+                      upload_to_minio(tarfilename, cluster_configuration["minio-bucket"], cluster_configuration["minio-job-folder"], job_name, minio_client)
                   else:
-                      logger.info(f'Downloading {upload_bucket}/{job_name}/{tarfilename} to {tarfilename}...')
-                      download_from_minio(tarfilename, upload_bucket, job_name, minio_client, remove_minio_files)
+                      logger.info(f'Downloading {cluster_configuration["minio-bucket"]}/{cluster_configuration["minio-job-folder"]}/{job_name}/{tarfilename} to {tarfilename}...')
+                      download_from_minio(tarfilename, cluster_configuration["minio-bucket"], cluster_configuration["minio-job-folder"], job_name, minio_client, remove_minio_files)
 
                       logger.info(f'Extracting {tarfilename} to {target}...')
                       extract_tarfile(tarfilename, target)
@@ -339,14 +396,13 @@ implementation:
               return node_selector
 
           def initialize_init_container(
-              is_remote,
               base_image,
+              cluster_configuration,
               inputs,
+              is_remote,
               job_name,
-              upload_bucket,
-              minio_url,
               minio_secret,
-              mount_path
+              mount_path,
           ):
               if(not is_remote):
                   return ""
@@ -356,14 +412,18 @@ implementation:
               )
 
               # inner components loose type information as needed by lists/dicts
-              # -> inputs need to be a string (using json here)
+              # -> cluster_configuration & inputs need to be a string (using json)
+              cluster_configuration_json = json.dumps({
+                  "minio-bucket": cluster_configuration["minio-bucket"],
+                  "minio-job-folder": cluster_configuration["minio-job-folder"],
+                  "minio-url": cluster_configuration["minio-url"],
+              })
               inputs_json = json.dumps(inputs)
               parameters = {
+                  "cluster_configuration": cluster_configuration_json,
                   "inputs": inputs_json,
                   "job_name": job_name,
-                  "upload_bucket": upload_bucket,
-                  "minio_url": minio_url,
-                  "is_upload": "False"
+                  "is_upload": "False",
               }
 
               command, _, _ = initialize_command(
@@ -468,24 +528,27 @@ implementation:
               return command_with_initialized_args, inputs, outputs
 
           def initialize_fetch_command(
-              outputs,
+              cluster_configuration,
               job_name,
-              upload_bucket,
-              minio_url,
+              outputs,
           ):
               command_specification = kfp.components.func_to_component_text(
                   func=sync_with_minio
               )
 
               # inner components loose type information as needed by lists/dicts
-              # -> outputs need to be a string (using json here)
+              # -> cluster_configuration & inputs need to be a string (using json)
+              cluster_configuration_json = json.dumps({
+                  "minio-bucket": cluster_configuration["minio-bucket"],
+                  "minio-job-folder": cluster_configuration["minio-job-folder"],
+                  "minio-url": cluster_configuration["minio-url"],
+              })
               outputs_json = json.dumps(outputs)
               parameters = {
+                  "cluster_configuration": cluster_configuration_json,
                   "inputs": outputs_json,
                   "job_name": job_name,
-                  "upload_bucket": upload_bucket,
-                  "minio_url": minio_url,
-                  "is_upload": "True"
+                  "is_upload": "True",
               }
               command, _, _ = initialize_command(
                   command_specification,
@@ -493,7 +556,7 @@ implementation:
               )
               return command
 
-          def create_pvc_spec(pvc_name, namespace_spec, pvc_size):
+          def create_pvc_spec(pvc_name, namespace_spec, access_mode, pvc_size):
               pvc_spec = f"""apiVersion: batch/v1
       apiVersion: v1
       kind: PersistentVolumeClaim
@@ -502,24 +565,22 @@ implementation:
         {namespace_spec}
       spec:
         accessModes:
-        - ReadWriteMany
+        - {access_mode}
         resources:
           requests:
             storage: {pvc_size}
       """
               return yaml.safe_load(pvc_spec)
 
-          def create_minio_secret_spec(namespace_spec, minio_secret):
-              minio_user = os.getenv('MINIO_USER')
-              minio_pass = os.getenv('MINIO_PASS')
+          def create_minio_secret_spec(cluster_configuration, minio_secret, namespace_spec):
               minio_secret_spec = f"""apiVersion: v1
       kind: Secret
       metadata:
         name: {minio_secret}
         {namespace_spec}
       stringData:
-        accesskey: {minio_user}
-        secretkey: {minio_pass}
+        accesskey: {cluster_configuration["minio-accesskey"]}
+        secretkey: {cluster_configuration["minio-secretkey"]}
       """
               return yaml.safe_load(minio_secret_spec)
 
@@ -634,12 +695,29 @@ implementation:
       """
               return yaml.safe_load(job_spec)
 
-          def submit_and_monitor_job(job_spec, namespace, api_client):
+          def submit_and_monitor_job(api_client, job_spec, namespace, additional_job_resources=[]):
               objects = utils.create_from_yaml(
                   api_client,
                   yaml_objects=[job_spec]
               )
               job_name = objects[0][0].metadata.name
+              job_uid = objects[0][0].metadata.uid
+
+              logger.info("Creating additional job resource...")
+              if additional_job_resources:
+                  for resource in additional_job_resources:
+                      resource['metadata']['ownerReferences'] = [
+                          {
+                              "apiVersion": "batch/v1",
+                              "kind": "Job",
+                              "name": job_name,
+                              "uid": job_uid,
+                          }
+                      ]
+                  utils.create_from_yaml(
+                      api_client,
+                      yaml_objects=additional_job_resources
+                  )
 
               logger.info("Waiting for job to succeed...")
               job_watch = watch.Watch()
@@ -655,10 +733,12 @@ implementation:
 
                       # See https://stackoverflow.com/questions/65938572/kubernetes-python-client-equivalent-of-kubectl-wait-for-command
                       pod_watch = watch.Watch()
-                      for pod_event in pod_watch.stream(func=core_api.list_namespaced_pod,
-                                                namespace=namespace,
-                                                label_selector="controller-uid=" + job.metadata.labels["controller-uid"],
-                                                timeout_seconds=0):
+                      for pod_event in pod_watch.stream(
+                          func=core_api.list_namespaced_pod,
+                          namespace=namespace,
+                          label_selector=f"controller-uid={job.metadata.labels['controller-uid']}",
+                          timeout_seconds=0
+                      ):
                           pod = pod_event["object"]
                           pod_name = pod.metadata.name
 
@@ -708,41 +788,49 @@ implementation:
           # Main Workflow
           ###########################################################################
 
-          logger.info("Establishing cluster connection...")
-          api_client, is_remote, local_api_client = establish_kubernetes_connection()
+          logger.info("Establishing local cluster connection...")
+          local_api_client = establish_local_cluster_connection()
+
+          logger.info("Receiving training cluster configuration...")
+          cluster_configuration = get_cluster_configuration(
+              local_api_client,
+              cluster_configuration_secret
+          )
+
+          logger.info("Establishing training cluster connection...")
+          api_client, is_remote = establish_training_cluster_connection(
+              local_api_client,
+              cluster_configuration
+          )
           batch_api = client.BatchV1Api(api_client)
           core_api = client.CoreV1Api(api_client)
 
-          logger.info("Initializing MinIO credentials...")
-          initialize_minio_credentials(local_api_client, minio_secret)
-
-          logger.info("Initializing configurations...")
+          logger.info("Initializing resources...")
           job_name = generate_unique_job_name(model_name)
-          if is_remote:
-              remote_minio_secret = f"{job_name}-minio-secret"
-          namespace, namespace_spec = initialize_namespace(namespace)
+          job_minio_secret = f"{job_name}-minio-secret"
+          namespace, namespace_spec = initialize_namespace(cluster_configuration["remote-namespace"])
           pvc_name = f"{job_name}-pvc"
           node_selector = initialize_nodeselector(node_selector)
 
           path_parameters = {
-                  "dataset_directory": dataset_directory,
-                  "model_dir": model_dir
-              }
+              "dataset_directory": dataset_directory,
+              "model_dir": model_dir
+          }
           train_command, inputs, outputs = initialize_command(
               train_specification,
               train_parameters,
               path_parameters,
               train_mount
           )
+
           init_container = initialize_init_container(
-              is_remote,
               base_image,
+              cluster_configuration,
               inputs,
+              is_remote,
               job_name,
-              upload_bucket,
-              minio_url,
-              remote_minio_secret,
-              train_mount
+              job_minio_secret,
+              train_mount,
           )
 
           logger.info("=======================================")
@@ -751,26 +839,36 @@ implementation:
           logger.info(f"job_name: {job_name}")
           logger.info(f"namespace: {namespace}")
           logger.info(f"is_remote: {is_remote}")
-          logger.info(f"minio_url: {minio_url}")
-          logger.info(f"minio_secret: {minio_secret}")
-          logger.info(f"remote_minio_secret: {remote_minio_secret}")
+          logger.info(f"minio_url: {cluster_configuration['minio-url']}")
+          logger.info(f"job_minio_secret: {job_minio_secret}")
           logger.info("inputs (input paths send to job):")
           for source, target in inputs:
-              logger.info(f"- {source} -> {upload_bucket}/{job_name}/{target}")
+              logger.info(f"- {source} -> {cluster_configuration['minio-bucket']}/{cluster_configuration['minio-job-folder']}/{job_name}/{target}")
           logger.info("outputs (output paths returning from job):")
           for source, target in outputs:
-              logger.info(f"- {target} <- {upload_bucket}/{job_name}/{source}")
+              logger.info(f"- {target} <- {cluster_configuration['minio-bucket']}/{cluster_configuration['minio-job-folder']}/{job_name}/{source}")
           logger.info(f"train_command: {train_command}")
           logger.info("=======================================")
 
+          additional_job_resources = []
+
           if (is_remote):
               logger.info("Using MinIO to sync data with a new remote PVC for the job...")
-              sync_with_minio(inputs, job_name, upload_bucket, minio_url, is_upload=True)
-              pvc_spec = create_pvc_spec(pvc_name, namespace_spec, pvc_size)
-              minio_secrets_spec = create_minio_secret_spec(namespace_spec, remote_minio_secret)
-              utils.create_from_yaml(
-                  api_client,
-                  yaml_objects=[pvc_spec, minio_secrets_spec]
+              sync_with_minio(cluster_configuration, inputs, job_name, is_upload=True)
+              additional_job_resources.append(
+                  create_pvc_spec(
+                      pvc_name,
+                      namespace_spec,
+                      cluster_configuration["access-mode"],
+                      pvc_size
+                  )
+              )
+              additional_job_resources.append(
+                  create_minio_secret_spec(
+                      cluster_configuration,
+                      job_minio_secret,
+                      namespace_spec
+                  )
               )
           else:
               logger.info(f"Pushing inputs to local {train_mount} mount as shared with job environment...")
@@ -793,17 +891,21 @@ implementation:
           )
 
           logger.info(f"Starting train job '{namespace}.{job_name}'...")
-          submit_and_monitor_job(train_job_spec, namespace, api_client)
+          submit_and_monitor_job(
+              api_client,
+              train_job_spec,
+              namespace,
+              additional_job_resources,
+          )
 
           logger.info("Receiving training outputs...")
           if not os.path.exists(model_dir):
               os.makedirs(model_dir)
           if (is_remote):
               fetch_command = initialize_fetch_command(
-                  outputs,
+                  cluster_configuration,
                   job_name,
-                  upload_bucket,
-                  minio_url
+                  outputs
               )
               fetch_job_name = f"{job_name}-fetch"
 
@@ -814,15 +916,21 @@ implementation:
                   base_image,
                   fetch_command,
                   train_mount,
-                  remote_minio_secret,
+                  job_minio_secret,
                   pvc_name
               )
 
               logger.info(f"Starting fetch job '{namespace}.{fetch_job_name}'...")
-              submit_and_monitor_job(fetch_job_spec, namespace, api_client)
+              submit_and_monitor_job(api_client, fetch_job_spec, namespace)
 
               logger.info("Fetching output data from MinIO & deleting it afterwards...")
-              sync_with_minio(outputs, job_name, upload_bucket, minio_url, is_upload=False, remove_minio_files=True)
+              sync_with_minio(
+                  cluster_configuration,
+                  outputs,
+                  job_name,
+                  is_upload=False,
+                  remove_minio_files=True
+              )
 
               logger.info(f"Deleting Job {fetch_job_name}...")
               batch_api.delete_namespaced_job(fetch_job_name, namespace)
@@ -833,12 +941,6 @@ implementation:
 
           logger.info(f"Deleting Job {job_name}...")
           batch_api.delete_namespaced_job(job_name, namespace)
-          if (is_remote):
-              logger.info(f"Deleting remote PVC {pvc_name}...")
-              core_api.delete_namespaced_persistent_volume_claim(pvc_name, namespace)
-
-              logger.info(f"Deleting remote MinIO secret {remote_minio_secret}...")
-              core_api.delete_namespaced_secret(remote_minio_secret, namespace)
 
           logger.info("Finished.")
 
@@ -851,17 +953,13 @@ implementation:
       _parser.add_argument("--train-mount", dest="train_mount", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--model-name", dest="model_name", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--base-image", dest="base_image", type=str, required=False, default=argparse.SUPPRESS)
-      _parser.add_argument("--namespace", dest="namespace", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--node-selector", dest="node_selector", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--pvc-name", dest="pvc_name", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--pvc-size", dest="pvc_size", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--cpus", dest="cpus", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--gpus", dest="gpus", type=int, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--memory", dest="memory", type=str, required=False, default=argparse.SUPPRESS)
-      _parser.add_argument("--remote-host", dest="remote_host", type=str, required=False, default=argparse.SUPPRESS)
-      _parser.add_argument("--minio-url", dest="minio_url", type=str, required=False, default=argparse.SUPPRESS)
-      _parser.add_argument("--minio-secret", dest="minio_secret", type=str, required=False, default=argparse.SUPPRESS)
-      _parser.add_argument("--upload-bucket", dest="upload_bucket", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--cluster-configuration-secret", dest="cluster_configuration_secret", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--model-dir", dest="model_dir", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
       _parsed_args = vars(_parser.parse_args())
 
@@ -888,11 +986,6 @@ implementation:
         then:
         - --base-image
         - {inputValue: base_image}
-    - if:
-        cond: {isPresent: namespace}
-        then:
-        - --namespace
-        - {inputValue: namespace}
     - if:
         cond: {isPresent: node_selector}
         then:
@@ -924,24 +1017,9 @@ implementation:
         - --memory
         - {inputValue: memory}
     - if:
-        cond: {isPresent: remote_host}
+        cond: {isPresent: cluster_configuration_secret}
         then:
-        - --remote-host
-        - {inputValue: remote_host}
-    - if:
-        cond: {isPresent: minio_url}
-        then:
-        - --minio-url
-        - {inputValue: minio_url}
-    - if:
-        cond: {isPresent: minio_secret}
-        then:
-        - --minio-secret
-        - {inputValue: minio_secret}
-    - if:
-        cond: {isPresent: upload_bucket}
-        then:
-        - --upload-bucket
-        - {inputValue: upload_bucket}
+        - --cluster-configuration-secret
+        - {inputValue: cluster_configuration_secret}
     - --model-dir
     - {outputPath: model_dir}
