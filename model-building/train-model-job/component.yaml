@@ -1,8 +1,10 @@
 name: Train model job
 description: Trains a model. Once trained, the model is persisted to model_dir.
 inputs:
-- {name: dataset_directory, type: String, description: Path to the directory with
+- {name: train_dataset_dir, type: String, description: Path to the directory with
     training data.}
+- {name: validation_dataset_dir, type: String, description: Path to the directory
+    with validation data to be used during training.}
 - {name: train_specification, type: String, description: Training command as generated
     from a Python function using kfp.components.func_to_component_text.}
 - {name: train_parameters, type: 'typing.Dict[str, str]', description: Dictionary
@@ -37,6 +39,21 @@ inputs:
     are chosen if not present. The secret may provide a suitable kubernetes bearer
     token, the associated namespace, a host, etc. Example: "remote-power-cluster".',
   default: '', optional: true}
+- {name: distribution_specification, type: 'typing.Dict[str, str]', description: 'Optional
+    dictionary specifiying the distribution behavior. By default, no distributed training
+    is executed, which results in an ordinary Kubernetes Job  for training. Otherwise,
+    dictionary entries determine the distribution behavior. The "distribution_type"
+    entry determines the distribution type: "Job" (no distribution; ordinary Kubernetes
+    job), "MPI" (all-reduce style distribution via Horovod), or "TF" (parameter-server
+    style distribution via distributed training with TensorFlow). Depending on the
+    distribution type, additional dictionary entries can be processed. For distributed
+    training jobs, the "number_of_workers" (e.g., 2) determines the number of worker
+    replicas for training. Individual resource limits can be controlled via "worker_cpus"
+    (e.g., "1000m") and "worker_memory" (e.g., "1Gi"). MPI additionally provides a
+    fine-grained control of launcher cpu and memory limits via "launcher_cpus" (e.g.,
+    "1000m") and "launcher_memory" (e.g., "1Gi"). Full example with MPI: {"distribution_type":
+    "MPI", "number_of_workers": 2, "worker_cpus": "8", "worker_memory": "32Gi", "launcher_cpus":
+    "2", "launcher_memory": "8Gi"}', optional: true}
 outputs:
 - {name: model_dir, type: String, description: Target path where the model will be
     stored.}
@@ -57,7 +74,8 @@ implementation:
           return file_path
 
       def train_model_job(
-              dataset_directory,
+              train_dataset_dir,
+              validation_dataset_dir,
               train_specification,
               train_parameters,
               model_dir,
@@ -71,12 +89,14 @@ implementation:
               gpus = 0,
               memory = "",
               cluster_configuration_secret = "",
-      ):
+              distribution_specification = None,
+              ):
           '''
           Trains a model. Once trained, the model is persisted to model_dir.
 
                   Parameters:
-                          dataset_directory: Path to the directory with training data.
+                          train_dataset_dir: Path to the directory with training data.
+                          validation_dataset_dir: Path to the directory with validation data to be used during training.
                           train_specification: Training command as generated from a Python function using kfp.components.func_to_component_text.
                           train_parameters: Dictionary mapping formal to actual parameters for the training spacification.
                           model_dir: Target path where the model will be stored.
@@ -90,6 +110,7 @@ implementation:
                           gpus: Optional number of GPUs for the job. Example: 2.
                           memory: Optional memory limit for the job. Leave empty for cluster defaults (typically no limit). Example: "1Gi".
                           cluster_configuration_secret: Optional secret name configuring a (remote) Kubernetes cluster to run the job in and the backing MinIO object store. All secret's data values are optional and appropriate defaults are chosen if not present. The secret may provide a suitable kubernetes bearer token, the associated namespace, a host, etc. Example: "remote-power-cluster".
+                          distribution_specification: Optional dictionary specifiying the distribution behavior. By default, no distributed training is executed, which results in an ordinary Kubernetes Job  for training. Otherwise, dictionary entries determine the distribution behavior. The "distribution_type" entry determines the distribution type: "Job" (no distribution; ordinary Kubernetes job), "MPI" (all-reduce style distribution via Horovod), or "TF" (parameter-server style distribution via distributed training with TensorFlow). Depending on the distribution type, additional dictionary entries can be processed. For distributed training jobs, the "number_of_workers" (e.g., 2) determines the number of worker replicas for training. Individual resource limits can be controlled via "worker_cpus" (e.g., "1000m") and "worker_memory" (e.g., "1Gi"). MPI additionally provides a fine-grained control of launcher cpu and memory limits via "launcher_cpus" (e.g., "1000m") and "launcher_memory" (e.g., "1Gi"). Full example with MPI: {"distribution_type": "MPI", "number_of_workers": 2, "worker_cpus": "8", "worker_memory": "32Gi", "launcher_cpus": "2", "launcher_memory": "8Gi"}
           '''
           from datetime import datetime
           import errno
@@ -595,24 +616,64 @@ implementation:
               memory,
               gpus,
               init_container,
-              pvc_name
+              pvc_name,
+              distribution_specification,
           ):
               if cpus:
-                  cpus = f"cpu: {cpus}"
+                  cpu_spec = f"cpu: {cpus}"
               else:
-                  cpus = ""
+                  cpu_spec = ""
 
               if memory:
-                  memory = f"memory: {memory}"
+                  memory_spec = f"memory: {memory}"
               else:
-                  memory = ""
+                  memory_spec = ""
 
               if gpus:
-                  gpus = f"nvidia.com/gpu: {gpus}"
+                  gpu_spec = f"nvidia.com/gpu: {gpus}"
               else:
-                  gpus = ""
+                  gpu_spec = ""
 
-              job_spec = f"""apiVersion: batch/v1
+              if distribution_specification is None:
+                  distribution_specification = dict()
+
+              if "distribution_type" not in distribution_specification:
+                  distribution_specification["distribution_type"] = "Job"
+
+              if gpus < 1:
+                  slots_per_worker = 1
+              else:
+                  slots_per_worker = gpus
+
+              if "number_of_workers" in distribution_specification:
+                  number_of_workers = distribution_specification["number_of_workers"]
+              else:
+                  number_of_workers = 2
+
+              number_of_processes = number_of_workers*slots_per_worker
+
+              if "launcher_cpus" in distribution_specification:
+                  launcher_cpu_spec = f"cpu: {distribution_specification['launcher_cpus']}"
+              else:
+                  launcher_cpu_spec = ""
+
+              if "launcher_memory" in distribution_specification:
+                  launcher_memory_spec = f"memory: {distribution_specification['launcher_memory']}"
+              else:
+                  launcher_memory_spec = ""
+
+              if "worker_cpus" in distribution_specification:
+                  worker_cpu_spec = f"cpu: {distribution_specification['worker_cpus']}"
+              else:
+                  worker_cpu_spec = ""
+
+              if "worker_memory" in distribution_specification:
+                  worker_memory_spec = f"memory: {distribution_specification['worker_memory']}"
+              else:
+                  worker_memory_spec = ""
+
+              if distribution_specification["distribution_type"] == "Job":
+                  job_spec = f"""apiVersion: batch/v1
       kind: Job
       metadata:
         name: {job_name}
@@ -634,9 +695,9 @@ implementation:
                 restartPolicy: Never
                 resources:
                   limits:
-                    {cpus}
-                    {memory}
-                    {gpus}
+                    {cpu_spec}
+                    {memory_spec}
+                    {gpu_spec}
             {init_container}
             volumes:
               - name: training
@@ -644,6 +705,121 @@ implementation:
                   claimName: {pvc_name}
             restartPolicy: Never
       """
+              elif distribution_specification["distribution_type"] == 'MPI':
+                  job_spec = f"""apiVersion: kubeflow.org/v1
+      kind: MPIJob
+      metadata:
+        name: {job_name}
+        {namespace_spec}
+      spec:
+        slotsPerWorker: {slots_per_worker}
+        runPolicy:
+          cleanPodPolicy: Running
+        mpiReplicaSpecs:
+          Launcher:
+            replicas: 1
+            template:
+              metadata:
+                annotations:
+                  sidecar.istio.io/inject: "false"
+              spec:
+                {init_container}
+                volumes:
+                  - name: training
+                    persistentVolumeClaim:
+                      claimName: {pvc_name}
+                containers:
+                - image: {base_image}
+                  name: mpi-launcher
+                  command:
+                  - mpirun
+                  - -np
+                  - "{number_of_processes}"
+                  - --allow-run-as-root
+                  - -bind-to
+                  - none
+                  - -map-by
+                  - slot
+                  - --prefix
+                  - /opt/conda
+                  - -mca
+                  - pml
+                  - ob1
+                  - -mca
+                  - btl
+                  - ^openib
+                  - -x
+                  - NCCL_DEBUG=INFO
+                  args: {train_command}
+                  resources:
+                    limits:
+                      {launcher_cpu_spec}
+                      {launcher_memory_spec}
+          Worker:
+            replicas: {number_of_workers}
+            template:
+              metadata:
+                annotations:
+                  sidecar.istio.io/inject: "false"
+              spec:
+                {node_selector}
+                containers:
+                - image: {base_image}
+                  name: mpi-worker
+                  volumeMounts:
+                    - mountPath: /train
+                      name: training
+                  resources:
+                    limits:
+                      {worker_cpu_spec}
+                      {worker_memory_spec}
+                      {gpu_spec}
+                {init_container}
+                volumes:
+                  - name: training
+                    persistentVolumeClaim:
+                      claimName: {pvc_name}
+      """
+              elif distribution_specification["distribution_type"] == 'TF':
+                  job_spec = f"""apiVersion: kubeflow.org/v1
+      kind: TFJob
+      metadata:
+        name: {job_name}
+        {namespace_spec}
+      spec:
+        runPolicy:
+          cleanPodPolicy: None
+        tfReplicaSpecs:
+          Worker:
+            replicas: {number_of_workers}
+            restartPolicy: OnFailure
+            template:
+              metadata:
+                annotations:
+                  sidecar.istio.io/inject: "false"
+              spec:
+                {node_selector}
+                containers:
+                  - name: tensorflow
+                    image: {base_image}
+                    command: {train_command}
+                    volumeMounts:
+                      - mountPath: /train
+                        name: training
+                    resources:
+                      limits:
+                        {worker_cpu_spec}
+                        {worker_memory_spec}
+                        {gpu_spec}
+                volumes:
+                  - name: training
+                    persistentVolumeClaim:
+                      claimName: {pvc_name}
+      """
+              else:
+                  err = f"Job failed while executing - unknown distribution_type: {distribution_specification['distribution_type']}"
+                  logger.error(err)
+                  raise Exception(err)
               return yaml.safe_load(job_spec)
 
           def create_fetch_job_spec(
@@ -813,7 +989,8 @@ implementation:
           node_selector = initialize_nodeselector(node_selector)
 
           path_parameters = {
-              "dataset_directory": dataset_directory,
+              "train_dataset_dir": train_dataset_dir,
+              "validation_dataset_dir": validation_dataset_dir,
               "model_dir": model_dir
           }
           train_command, inputs, outputs = initialize_command(
@@ -887,7 +1064,8 @@ implementation:
               memory,
               gpus,
               init_container,
-              pvc_name
+              pvc_name,
+              distribution_specification
           )
 
           logger.info(f"Starting train job '{namespace}.{job_name}'...")
@@ -947,7 +1125,8 @@ implementation:
       import json
       import argparse
       _parser = argparse.ArgumentParser(prog='Train model job', description='Trains a model. Once trained, the model is persisted to model_dir.')
-      _parser.add_argument("--dataset-directory", dest="dataset_directory", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--train-dataset-dir", dest="train_dataset_dir", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--validation-dataset-dir", dest="validation_dataset_dir", type=str, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--train-specification", dest="train_specification", type=str, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--train-parameters", dest="train_parameters", type=json.loads, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--train-mount", dest="train_mount", type=str, required=False, default=argparse.SUPPRESS)
@@ -960,13 +1139,16 @@ implementation:
       _parser.add_argument("--gpus", dest="gpus", type=int, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--memory", dest="memory", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--cluster-configuration-secret", dest="cluster_configuration_secret", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--distribution-specification", dest="distribution_specification", type=json.loads, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--model-dir", dest="model_dir", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
       _parsed_args = vars(_parser.parse_args())
 
       _outputs = train_model_job(**_parsed_args)
     args:
-    - --dataset-directory
-    - {inputPath: dataset_directory}
+    - --train-dataset-dir
+    - {inputPath: train_dataset_dir}
+    - --validation-dataset-dir
+    - {inputPath: validation_dataset_dir}
     - --train-specification
     - {inputValue: train_specification}
     - --train-parameters
@@ -1021,5 +1203,10 @@ implementation:
         then:
         - --cluster-configuration-secret
         - {inputValue: cluster_configuration_secret}
+    - if:
+        cond: {isPresent: distribution_specification}
+        then:
+        - --distribution-specification
+        - {inputValue: distribution_specification}
     - --model-dir
     - {outputPath: model_dir}

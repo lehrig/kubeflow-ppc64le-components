@@ -5,13 +5,13 @@ inputs:
     hub for datasets is supported. Example: "Lehrig/Monkey-Species-Collection".'}
 - {name: configuration, type: String, description: 'Name of the dataset configuration
     to load. Example: "downsized".', default: '', optional: true}
-- {name: label_column, type: String, description: 'Optional name of a label column
-    to be fetched as optional, additional output. Example: "label".', default: '',
+- {name: label_columns, type: 'typing.List[str]', description: 'Optional list of label
+    column names to be fetched as optional, additional output. Example: ["label"].',
   optional: true}
 outputs:
 - {name: dataset_dir, type: String, description: 'Target directory where the dataset
     will be loaded to. Should be available as a mount from a PVC. Example: "/blackboard/dataset".'}
-- {name: labels, type: 'typing.List[str]'}
+- {name: labels, type: 'typing.Dict[str, typing.List[str]]'}
 implementation:
   container:
     image: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest
@@ -32,7 +32,7 @@ implementation:
           path,
           dataset_dir,
           configuration = "",
-          label_column = "",
+          label_columns = None,
       ):
           '''
           Load a Huggingface Dataset.
@@ -41,9 +41,9 @@ implementation:
                           path: Path from which to load the dataset. Huggingfaces hub for datasets is supported. Example: "Lehrig/Monkey-Species-Collection".
                           dataset_dir: Target directory where the dataset will be loaded to. Should be available as a mount from a PVC. Example: "/blackboard/dataset".
                           configuration: Name of the dataset configuration to load. Example: "downsized".
-                          label_column: Optional name of a label column to be fetched as optional, additional output. Example: "label".
+                          label_columns: Optional list of label column names to be fetched as optional, additional output. Example: ["label"].
                   Returns:
-                          labels: List of labels, if available. Empty list otherwise. Example: ["cat", "dog"]
+                          labels: Dictionary mapping label columns to associated labels, if available. Empty dictionary otherwise. Example: {"labels": ["cat", "dog"]}
           '''
 
           from collections import namedtuple
@@ -86,12 +86,13 @@ implementation:
           logging.info(f"Dataset saved. Contents of '{dataset_dir}':")
           logging.info(os.listdir(dataset_dir))
 
-          labels = []
-          if label_column:
-              logging.info(f"Fetching labels from column '{label_column}'...")
-              if isinstance(dataset, DatasetDict):
-                  dataset = next(iter(dataset.values()))
-              labels = dataset.features[label_column].names
+          labels = dict()
+          if isinstance(dataset, DatasetDict):
+              dataset = next(iter(dataset.values()))
+              for label_column in label_columns:
+                  logging.info(f"Fetching labels from column '{label_column}'...")
+                  labels[label_column] = dataset.features[label_column].names
+
           output = namedtuple(
                   'LoadDatasetOutput',
                   ['labels']
@@ -115,11 +116,12 @@ implementation:
 
           return json.dumps(obj, default=default_serializer, sort_keys=True)
 
+      import json
       import argparse
       _parser = argparse.ArgumentParser(prog='Load dataset', description='Load a Huggingface Dataset.')
       _parser.add_argument("--path", dest="path", type=str, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--configuration", dest="configuration", type=str, required=False, default=argparse.SUPPRESS)
-      _parser.add_argument("--label-column", dest="label_column", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--label-columns", dest="label_columns", type=json.loads, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--dataset-dir", dest="dataset_dir", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("----output-paths", dest="_output_paths", type=str, nargs=1)
       _parsed_args = vars(_parser.parse_args())
@@ -149,10 +151,10 @@ implementation:
         - --configuration
         - {inputValue: configuration}
     - if:
-        cond: {isPresent: label_column}
+        cond: {isPresent: label_columns}
         then:
-        - --label-column
-        - {inputValue: label_column}
+        - --label-columns
+        - {inputValue: label_columns}
     - --dataset-dir
     - {outputPath: dataset_dir}
     - '----output-paths'
