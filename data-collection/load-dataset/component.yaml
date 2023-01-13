@@ -34,7 +34,7 @@ implementation:
           configuration = "",
           label_columns = None,
       ):
-          '''
+          """
           Load a Huggingface Dataset.
 
                   Parameters:
@@ -44,7 +44,7 @@ implementation:
                           label_columns: Optional list of label column names to be fetched as optional, additional output. Example: ["label"].
                   Returns:
                           labels: Dictionary mapping label columns to associated labels, if available. Empty dictionary otherwise. Example: {"labels": ["cat", "dog"]}
-          '''
+          """
 
           from collections import namedtuple
           from datasets import load_dataset
@@ -57,12 +57,14 @@ implementation:
           logging.basicConfig(
               stream=sys.stdout,
               level=logging.INFO,
-              format='%(levelname)s %(asctime)s: %(message)s'
+              format="%(levelname)s %(asctime)s: %(message)s",
           )
 
           if not configuration:
               configuration = None
-          logging.info(f"Loading dataset from '{path}' using configuration '{configuration}'...")
+          logging.info(
+              f"Loading dataset from '{path}' using configuration '{configuration}'..."
+          )
           dataset = load_dataset(path, configuration)
 
           logging.info("Reading image files into bytes...")
@@ -93,10 +95,7 @@ implementation:
                   logging.info(f"Fetching labels from column '{label_column}'...")
                   labels[label_column] = dataset.features[label_column].names
 
-          output = namedtuple(
-                  'LoadDatasetOutput',
-                  ['labels']
-              )
+          output = namedtuple("LoadDatasetOutput", ["labels"])
 
           logging.info("Finished.")
           return output(labels)
