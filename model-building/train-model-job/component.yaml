@@ -822,7 +822,7 @@ implementation:
                       "group": "kubeflow.org",
                       "version": "v1",
                       "plural": "mpijobs",
-                      "label": "training.kubeflow.org/job-name",
+                      "label": "training.kubeflow.org/replica-type=launcher,training.kubeflow.org/job-name",
                   }
               elif distribution_specification["distribution_type"] == "TF":
                   job_spec = f"""apiVersion: kubeflow.org/v1
@@ -1046,13 +1046,7 @@ implementation:
                               f"Pod {pod_name}: {pod_event['type']} - {pod.status.phase}"
                           )
 
-                          # MPI
-                          if (
-                              job_config["plural"] == "mpijobs"
-                              and not pod_name == f"{job_name}-launcher"
-                          ):
-                              logger.info("Skipping: for MPI, only the launcher pod is required (which already collects all worker logs)")
-                          elif pod_name in pods_being_monitored:
+                          if pod_name in pods_being_monitored:
                               pod_watch.stop()
                           elif pod_name not in pods_being_monitored and (
                               pod.status.phase == "Running"
