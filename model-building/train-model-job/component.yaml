@@ -768,7 +768,7 @@ implementation:
                     persistentVolumeClaim:
                       claimName: {pvc_name}
                 containers:
-                - image: {base_image}
+                - image: quay.io/ibm/kubeflow-notebook-image-ppc64le@sha256:0af11b130acfe36369ec53c5e54e80e29b8297673d7d278ed3f2e82ef1595970
                   name: mpi-launcher
                   command:
                   - mpirun
@@ -803,7 +803,7 @@ implementation:
               spec:
                 {node_selector}
                 containers:
-                - image: {base_image}
+                - image: quay.io/ibm/kubeflow-notebook-image-ppc64le@sha256:0af11b130acfe36369ec53c5e54e80e29b8297673d7d278ed3f2e82ef1595970
                   name: mpi-worker
                   volumeMounts:
                     - mountPath: /train
@@ -1176,6 +1176,7 @@ implementation:
               logger.info(
                   f"- {target} <- {cluster_configuration['minio-bucket']}/{cluster_configuration['minio-job-folder']}/{job_name}/{source}"
               )
+          logger.info(f"distribution_specification: {distribution_specification}")
           logger.info(f"train_command: {train_command}")
           logger.info("=======================================")
 
