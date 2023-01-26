@@ -643,6 +643,8 @@ implementation:
               init_container,
               pvc_name,
               distribution_specification,
+              minio_url,
+              minio_secret,
           ):
               if cpus:
                   cpu_spec = f"cpu: {cpus}"
@@ -724,6 +726,27 @@ implementation:
                   - mountPath: {train_mount}
                     name: training
                 restartPolicy: Never
+                env:
+                  - name: S3_ENDPOINT
+                    value: {minio_url}
+                  - name: AWS_ACCESS_KEY_ID
+                    valueFrom:
+                      secretKeyRef:
+                        name: {minio_secret}
+                        key: accesskey
+                        optional: false
+                  - name: AWS_SECRET_ACCESS_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: {minio_secret}
+                        key: secretkey
+                        optional: false
+                  - name: AWS_S3_SIGNATURE_VERSION
+                    value: "s3v4"
+                  - name: JOB_NAME
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: metadata.name
                 resources:
                   limits:
                     {cpu_spec}
@@ -768,7 +791,7 @@ implementation:
                     persistentVolumeClaim:
                       claimName: {pvc_name}
                 containers:
-                - image: quay.io/ibm/kubeflow-notebook-image-ppc64le@sha256:0af11b130acfe36369ec53c5e54e80e29b8297673d7d278ed3f2e82ef1595970
+                - image: {base_image}
                   name: mpi-launcher
                   command:
                   - mpirun
@@ -803,8 +826,29 @@ implementation:
               spec:
                 {node_selector}
                 containers:
-                - image: quay.io/ibm/kubeflow-notebook-image-ppc64le@sha256:0af11b130acfe36369ec53c5e54e80e29b8297673d7d278ed3f2e82ef1595970
+                - image: {base_image}
                   name: mpi-worker
+                  env:
+                  - name: S3_ENDPOINT
+                    value: {minio_url}
+                  - name: AWS_ACCESS_KEY_ID
+                    valueFrom:
+                      secretKeyRef:
+                        name: {minio_secret}
+                        key: accesskey
+                        optional: false
+                  - name: AWS_SECRET_ACCESS_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: {minio_secret}
+                        key: secretkey
+                        optional: false
+                  - name: AWS_S3_SIGNATURE_VERSION
+                    value: "s3v4"
+                  - name: JOB_NAME
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: metadata.name
                   volumeMounts:
                     - mountPath: /train
                       name: training
@@ -849,6 +893,27 @@ implementation:
                   - name: tensorflow
                     image: {base_image}
                     command: {train_command}
+                    env:
+                    - name: S3_ENDPOINT
+                      value: {minio_url}
+                    - name: AWS_ACCESS_KEY_ID
+                      valueFrom:
+                        secretKeyRef:
+                          name: {minio_secret}
+                          key: accesskey
+                          optional: false
+                    - name: AWS_SECRET_ACCESS_KEY
+                      valueFrom:
+                        secretKeyRef:
+                          name: {minio_secret}
+                          key: secretkey
+                          optional: false
+                    - name: AWS_S3_SIGNATURE_VERSION
+                      value: "s3v4"
+                    - name: JOB_NAME
+                      valueFrom:
+                        fieldRef:
+                          fieldPath: metadata.name
                     volumeMounts:
                       - mountPath: /train
                         name: training
@@ -1216,6 +1281,8 @@ implementation:
               init_container,
               pvc_name,
               distribution_specification,
+              cluster_configuration["minio-url"],
+              job_minio_secret,
           )
 
           logger.info(f"Starting train job '{namespace}.{job_name}'...")
