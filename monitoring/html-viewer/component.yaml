@@ -1,0 +1,61 @@
+name: View html
+metadata:
+  annotations: {author: Evidently AI}
+inputs:
+- {name: html, type: HTML}
+outputs:
+- {name: mlpipeline_ui_metadata}
+implementation:
+  container:
+    image: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest
+    command:
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp)
+      printf "%s" "$0" > "$program_path"
+      python3 -u "$program_path" "$@"
+    - |
+      def _make_parent_dirs_and_return_path(file_path: str):
+          import os
+          os.makedirs(os.path.dirname(file_path), exist_ok=True)
+          return file_path
+
+      def view_html(
+          html_path,
+          mlpipeline_ui_metadata_path,
+      ):
+
+          import os
+          import json
+
+          html = os.path.abspath(html_path)
+          html_content = open(html, 'r').read()
+
+          metadata = {
+              'outputs' : [{
+              'type': 'web-app',
+              'storage': 'inline',
+              'source': html_content,
+              }, {
+              'type': 'web-app',
+              'storage': 'inline',
+              'source': '<h1>Hello, World!</h1>',
+              }]
+          }
+
+          with open(mlpipeline_ui_metadata_path, 'w') as f:
+              json.dump(metadata, f)
+
+      import argparse
+      _parser = argparse.ArgumentParser(prog='View html', description='')
+      _parser.add_argument("--html", dest="html_path", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--mlpipeline-ui-metadata", dest="mlpipeline_ui_metadata_path", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
+      _parsed_args = vars(_parser.parse_args())
+
+      _outputs = view_html(**_parsed_args)
+    args:
+    - --html
+    - {inputPath: html}
+    - --mlpipeline-ui-metadata
+    - {outputPath: mlpipeline_ui_metadata}

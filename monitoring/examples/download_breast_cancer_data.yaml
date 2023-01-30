@@ -1,0 +1,49 @@
+name: Download data
+metadata:
+  annotations: {author: Adam Shedivy}
+outputs:
+- {name: output, type: CSV}
+implementation:
+  container:
+    image: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest
+    command:
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp)
+      printf "%s" "$0" > "$program_path"
+      python3 -u "$program_path" "$@"
+    - |
+      def _make_parent_dirs_and_return_path(file_path: str):
+          import os
+          os.makedirs(os.path.dirname(file_path), exist_ok=True)
+          return file_path
+
+      def download_data(
+          output_path,
+      ):
+
+          from sklearn.datasets import load_breast_cancer
+          from sklearn.model_selection import train_test_split
+          import pandas as pd
+          from pathlib import Path
+
+          # Gets and split dataset
+          data = load_breast_cancer(as_frame=True)
+          X, y = data.data, data.target
+
+          dataset = X.copy(deep=True)
+          dataset['target'] = y
+
+          Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+          dataset.to_csv(output_path)
+
+      import argparse
+      _parser = argparse.ArgumentParser(prog='Download data', description='')
+      _parser.add_argument("--output", dest="output_path", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
+      _parsed_args = vars(_parser.parse_args())
+
+      _outputs = download_data(**_parsed_args)
+    args:
+    - --output
+    - {outputPath: output}

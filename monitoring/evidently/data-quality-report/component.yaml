@@ -1,0 +1,61 @@
+name: Data quality report
+metadata:
+  annotations: {author: Evidently AI}
+inputs:
+- {name: cur, type: CSV}
+outputs:
+- {name: output, type: HTML}
+implementation:
+  container:
+    image: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest
+    command:
+    - sh
+    - -c
+    - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+      'evidently==0.2.0' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install
+      --quiet --no-warn-script-location 'evidently==0.2.0' --user) && "$0" "$@"
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp)
+      printf "%s" "$0" > "$program_path"
+      python3 -u "$program_path" "$@"
+    - |
+      def _make_parent_dirs_and_return_path(file_path: str):
+          import os
+          os.makedirs(os.path.dirname(file_path), exist_ok=True)
+          return file_path
+
+      def data_quality_report(
+          cur_path,
+          output_path,
+      ):
+
+          import pandas as pd
+          from evidently.metric_preset import DataQualityPreset
+          from evidently.report import Report
+          from pathlib import Path
+
+          df = pd.read_csv(cur_path)
+
+          report = Report(metrics=[
+              DataQualityPreset()
+          ])
+
+          report.run(current_data=df, reference_data=None, column_mapping=None)
+
+          Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+          report.save_html(output_path)
+
+      import argparse
+      _parser = argparse.ArgumentParser(prog='Data quality report', description='')
+      _parser.add_argument("--cur", dest="cur_path", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--output", dest="output_path", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
+      _parsed_args = vars(_parser.parse_args())
+
+      _outputs = data_quality_report(**_parsed_args)
+    args:
+    - --cur
+    - {inputPath: cur}
+    - --output
+    - {outputPath: output}

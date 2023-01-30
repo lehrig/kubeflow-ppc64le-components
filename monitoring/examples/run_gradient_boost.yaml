@@ -1,0 +1,48 @@
+name: Run gradient boost
+inputs:
+- {name: data, type: JSON}
+outputs:
+- {name: output, type: String}
+implementation:
+  container:
+    image: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest
+    command:
+    - sh
+    - -c
+    - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+      'scikit-learn' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet
+      --no-warn-script-location 'scikit-learn' --user) && "$0" "$@"
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp)
+      printf "%s" "$0" > "$program_path"
+      python3 -u "$program_path" "$@"
+    - "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n   \
+      \ os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return file_path\n\
+      \ndef run_gradient_boost(\n    data_path,\n    output_path,\n):\n\n    import\
+      \ json\n    from pathlib import Path    \n    import pandas as pd\n    from\
+      \ sklearn.ensemble import GradientBoostingClassifier\n\n    with open(data_path,\
+      \ 'r') as f:\n        data = json.loads(f.read())\n\n    X_train = pd.DataFrame.from_dict(data['X_train'])\n\
+      \    X_valid = pd.DataFrame.from_dict(data['X_valid'])\n    y_train = pd.DataFrame.from_dict(data['y_train'])\n\
+      \    y_valid = pd.DataFrame.from_dict(data['y_valid'])\n\n    boost = GradientBoostingClassifier(\n\
+      \        learning_rate=0.1,\n        n_estimators=100,\n        max_depth=8,\n\
+      \        random_state=1)\n\n    boost.fit(X_train, y_train)\n\n    # print(\"\
+      Training Accuracy: %0.2f\" % boost.score(X_train, y_train))\n    # print(\"\
+      Validation Accuracy: %0.2f\" % boost.score(X_valid, y_valid))\n    # print(\"\
+      Test Accuracy: %0.2f\" % boost.score(X_test, y_test))\n\n    Path.mkdir(output_path.parent,\
+      \ parents=True, exist_ok=True)\n    with open(output_path, 'w') as f:\n    \
+      \    f.write(\"Training Accuracy: %0.2f\\n\" % boost.score(X_train, y_train))\n\
+      \        f.write(\"Validation Accuracy: %0.2f\\n\" % boost.score(X_valid, y_valid))\n\
+      \        f.write(\"Test Accuracy: %0.2f\\n\" % boost.score(X_test, y_test))\n\
+      \nimport argparse\n_parser = argparse.ArgumentParser(prog='Run gradient boost',\
+      \ description='')\n_parser.add_argument(\"--data\", dest=\"data_path\", type=str,\
+      \ required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--output\"\
+      , dest=\"output_path\", type=_make_parent_dirs_and_return_path, required=True,\
+      \ default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\n\
+      _outputs = run_gradient_boost(**_parsed_args)\n"
+    args:
+    - --data
+    - {inputPath: data}
+    - --output
+    - {outputPath: output}
