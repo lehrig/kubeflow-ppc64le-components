@@ -1,0 +1,229 @@
+name: Monitor training
+description: Monitors a training job based on Tensorboard logs. Logs are expected
+  to be written to the tensorboard_s3_address.
+inputs:
+- {name: monitor_bucket, type: String, description: 'Optional bucket name of the targeted
+    s3 store. Example: "my-bucket".', default: mlpipeline, optional: true}
+- {name: monitor_folder, type: String, description: 'Optional folder name inside the
+    targeted s3 store. Example: "my-monitor".', default: tensorboard, optional: true}
+outputs:
+- {name: mlpipeline_ui_metadata}
+- {name: tensorboard_s3_address, type: String}
+implementation:
+  container:
+    image: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest
+    command:
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp)
+      printf "%s" "$0" > "$program_path"
+      python3 -u "$program_path" "$@"
+    - |
+      def _make_parent_dirs_and_return_path(file_path: str):
+          import os
+          os.makedirs(os.path.dirname(file_path), exist_ok=True)
+          return file_path
+
+      def monitor_training(
+          mlpipeline_ui_metadata_path,
+          monitor_bucket = "mlpipeline",
+          monitor_folder = "tensorboard",
+      ):
+          """
+          Monitors a training job based on Tensorboard logs. Logs are expected to be written to the tensorboard_s3_address.
+
+                  Parameters:
+                          monitor_bucket: Optional bucket name of the targeted s3 store. Example: "my-bucket".
+                          monitor_folder: Optional folder name inside the targeted s3 store. Example: "my-monitor".
+                  Returns:
+                          mlpipeline_ui_metadata_path: OutputTensorboard visualization for the pipelines UI.
+                          tensorboard_s3_address: The tensorboard_s3_address were logs are expected to be written to.
+          """
+          from collections import namedtuple
+          import json
+          from kubernetes import client, config, watch
+          import logging
+          import subprocess
+          import sys
+          import os
+          import yaml
+
+          logging.basicConfig(
+              stream=sys.stdout,
+              level=logging.INFO,
+              format="%(levelname)s %(asctime)s: %(message)s",
+          )
+          logger = logging.getLogger()
+
+          logger.info("Preparing monitor...")
+          tensorboard_name = os.environ["HOSTNAME"]
+          with open("/var/run/secrets/kubernetes.io/serviceaccount/namespace") as f:
+              namespace = f.read()
+          tensorboard_s3_address = (
+              f"s3://{monitor_bucket}/{monitor_folder}/{tensorboard_name}"
+          )
+          # See: https://github.com/kubeflow/kubeflow/blob/master/components/crud-web-apps/tensorboards/frontend/src/app/pages/index/index.component.ts
+          # window.open(`/tensorboard/${tensorboard.namespace}/${tensorboard.name}/`);
+          ui_address = f"/tensorboard/{namespace}/{tensorboard_name}/"
+
+          logger.info("Creating monitor...")
+          config.load_incluster_config()
+          api_client = client.ApiClient()
+          apps_api = client.AppsV1Api(api_client)
+          custom_object_api = client.CustomObjectsApi(api_client)
+
+          tensorboard_spec = f"""apiVersion: tensorboard.kubeflow.org/v1alpha1
+      kind: Tensorboard
+      metadata:
+        name: {tensorboard_name}
+        namespace: {namespace}
+      spec:
+        logspath: {tensorboard_s3_address}
+      """
+          custom_object_api.create_namespaced_custom_object(
+              group="tensorboard.kubeflow.org",
+              version="v1alpha1",
+              plural="tensorboards",
+              namespace=namespace,
+              body=yaml.safe_load(tensorboard_spec),
+          )
+
+          applied_s3_patch = False
+          tensorboard_watch = watch.Watch()
+          for tensorboard_event in tensorboard_watch.stream(
+              custom_object_api.list_namespaced_custom_object,
+              group="tensorboard.kubeflow.org",
+              version="v1alpha1",
+              plural="tensorboards",
+              namespace=namespace,
+              field_selector=f"metadata.name={tensorboard_name}",
+              timeout_seconds=0,
+          ):
+              logger.info(f"tensorboard_event: {tensorboard_event}")
+              tensorboard = tensorboard_event["object"]
+
+              if "status" not in tensorboard:
+                  logger.info("Skipping event (no status information found)...")
+                  continue
+
+              if not applied_s3_patch:
+                  host = (
+                      subprocess.run(
+                          ["getent", "hosts", "kubeflow.apps"], capture_output=True, text=True
+                      )
+                      .stdout.strip("\n")
+                      .split(" ")[-1]
+                  )
+                  minio_url = f"http://{host}/minio/"
+
+                  # TODO Use pod defaults once available
+                  # see: https://github.com/kubeflow/kubeflow/pull/6874
+                  body = client.V1Deployment()
+                  body.spec = {
+                      "template": {
+                          "spec": {
+                              "containers": [
+                                  {
+                                      "name": "tensorboard",
+                                      "env": [
+                                          {"name": "S3_ENDPOINT", "value": minio_url},
+                                          {"name": "AWS_ACCESS_KEY_ID", "value": "minio"},
+                                          {
+                                              "name": "AWS_SECRET_ACCESS_KEY",
+                                              "value": "minio123",
+                                          },
+                                          {
+                                              "name": "AWS_S3_SIGNATURE_VERSION",
+                                              "value": "s3v4",
+                                          },
+                                      ],
+                                  }
+                              ]
+                          }
+                      }
+                  }
+                  apps_api.patch_namespaced_deployment(
+                      name=tensorboard_name, namespace=namespace, body=body
+                  )
+                  applied_s3_patch = True
+
+              deployment_state = "Progressing"
+              if "conditions" in tensorboard["status"]:
+                  deployment_state = tensorboard["status"]["conditions"][-1][
+                      "deploymentState"
+                  ]
+
+              if deployment_state == "Progressing":
+                  logger.info("Tensorboard deployment is progressing...")
+              elif deployment_state == "Available":
+                  logger.info("Tensorboard is now available.")
+                  tensorboard_watch.stop()
+                  break
+              elif deployment_state == "ReplicaFailure":
+                  tensorboard_watch.stop()
+                  raise Exception("Tensorboard deployment failed with a ReplicaFailure!")
+              else:
+                  raise Exception(f"Unknown deployment state: {deployment_state}")
+
+          button_style = "align-items: center; appearance: none; background-color: rgb(26, 115, 232); border: 0px none rgb(255, 255, 255); border-radius: 3px; box-sizing: border-box; color: rgb(255, 255, 255); cursor: pointer; display: inline-flex; font-family: 'Google Sans', 'Helvetica Neue', sans-serif; font-size: 14px; font-stretch: 100%; font-style: normal; font-weight: 700; justify-content: center; letter-spacing: normal; line-height: 24.5px; margin: 0px 10px 2px 0px; min-height: 25px; min-width: 64px; padding: 2px 6px 2px 6px; position: relative; tab-size: 4; text-align: center; text-indent: 0px; text-rendering: auto; text-shadow: none; text-size-adjust: 100%; text-transform: none; user-select: none; vertical-align: middle; word-spacing: 0px; writing-mode: horizontal-tb;"
+          markdown = f'# Tensorboard\n- <a href="{ui_address}" style="{button_style}" target="_blank">Connect</a>\n- <a href="/_/tensorboards/" style="{button_style}" target="_blank">Manage all</a>'
+          markdown_output = {
+              "type": "markdown",
+              "storage": "inline",
+              "source": markdown,
+          }
+
+          ui_metadata = {"outputs": [markdown_output]}
+          with open(mlpipeline_ui_metadata_path, "w") as metadata_file:
+              json.dump(ui_metadata, metadata_file)
+
+          output = namedtuple("MonitorOutputs", ["tensorboard_s3_address"])
+          logging.info("Finished.")
+          return output(tensorboard_s3_address)
+
+      def _serialize_str(str_value: str) -> str:
+          if not isinstance(str_value, str):
+              raise TypeError('Value "{}" has type "{}" instead of str.'.format(
+                  str(str_value), str(type(str_value))))
+          return str_value
+
+      import argparse
+      _parser = argparse.ArgumentParser(prog='Monitor training', description='Monitors a training job based on Tensorboard logs. Logs are expected to be written to the tensorboard_s3_address.')
+      _parser.add_argument("--monitor-bucket", dest="monitor_bucket", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--monitor-folder", dest="monitor_folder", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--mlpipeline-ui-metadata", dest="mlpipeline_ui_metadata_path", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("----output-paths", dest="_output_paths", type=str, nargs=1)
+      _parsed_args = vars(_parser.parse_args())
+      _output_files = _parsed_args.pop("_output_paths", [])
+
+      _outputs = monitor_training(**_parsed_args)
+
+      _output_serializers = [
+          _serialize_str,
+
+      ]
+
+      import os
+      for idx, output_file in enumerate(_output_files):
+          try:
+              os.makedirs(os.path.dirname(output_file))
+          except OSError:
+              pass
+          with open(output_file, 'w') as f:
+              f.write(_output_serializers[idx](_outputs[idx]))
+    args:
+    - if:
+        cond: {isPresent: monitor_bucket}
+        then:
+        - --monitor-bucket
+        - {inputValue: monitor_bucket}
+    - if:
+        cond: {isPresent: monitor_folder}
+        then:
+        - --monitor-folder
+        - {inputValue: monitor_folder}
+    - --mlpipeline-ui-metadata
+    - {outputPath: mlpipeline_ui_metadata}
+    - '----output-paths'
+    - {outputPath: tensorboard_s3_address}
