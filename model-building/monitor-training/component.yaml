@@ -65,7 +65,7 @@ implementation:
           )
           # See: https://github.com/kubeflow/kubeflow/blob/master/components/crud-web-apps/tensorboards/frontend/src/app/pages/index/index.component.ts
           # window.open(`/tensorboard/${tensorboard.namespace}/${tensorboard.name}/`);
-          ui_address = f"/tensorboard/{namespace}/{tensorboard_name}/"
+          ui_address = f"/tensorboard/{namespace}/{tensorboard_name}/#scalars"
 
           logger.info("Creating monitor...")
           config.load_incluster_config()
@@ -108,15 +108,6 @@ implementation:
                   continue
 
               if not applied_s3_patch:
-                  host = (
-                      subprocess.run(
-                          ["getent", "hosts", "kubeflow.apps"], capture_output=True, text=True
-                      )
-                      .stdout.strip("\n")
-                      .split(" ")[-1]
-                  )
-                  minio_url = f"http://{host}/minio/"
-
                   # TODO Use pod defaults once available
                   # see: https://github.com/kubeflow/kubeflow/pull/6874
                   body = client.V1Deployment()
@@ -127,7 +118,10 @@ implementation:
                                   {
                                       "name": "tensorboard",
                                       "env": [
-                                          {"name": "S3_ENDPOINT", "value": minio_url},
+                                          {
+                                              "name": "S3_ENDPOINT",
+                                              "value": "http://minio-service.kubeflow:9000",
+                                          },
                                           {"name": "AWS_ACCESS_KEY_ID", "value": "minio"},
                                           {
                                               "name": "AWS_SECRET_ACCESS_KEY",
