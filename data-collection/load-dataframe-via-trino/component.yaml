@@ -1,0 +1,162 @@
+name: Load dataframe via trino
+description: Load a Pandas Dataframe using Trino as SQL client.
+inputs:
+- {name: query, type: String, description: 'An ANSI SQL compliant query for data,
+    as supported by Trino. Queries can either use explicit or implicit references
+    to schemata and catalogs. In the implicit case, the parameters catalog and schema
+    must be set. Example: "SELECT * FROM transactions OFFSET 20".'}
+- {name: columns_query, type: String, description: 'An ANSI SQL compliant "SHOW COLUMNS"
+    query for data columns, as supported by Trino. Queries can either use explicit
+    or implicit references to schemata and catalogs. In the implicit case, the parameters
+    catalog and schema must be set. If not set, generic column names are used. Example:
+    "SHOW COLUMNS FROM postgresql.public.transactions".', optional: true}
+- {name: host, type: String, description: 'Host of the trino installation, typically
+    the trino service in the trino namespace. Example:  "trino.trino".', default: trino.trino,
+  optional: true}
+- {name: port, type: Integer, description: 'Trino service port. Example: "8080".',
+  default: '8080', optional: true}
+- {name: user, type: String, description: 'Sets the query context to the given user.
+    The user needs permissions to access the targeted catalog and schema. Example:
+    "anybody".', default: anybody, optional: true}
+- {name: catalog, type: String, description: 'Sets the query context to the given
+    catalog. If None, the query must explicitly reference to schemata and catalogs.
+    If set, also a schema must be set. Example: "postgresql".', optional: true}
+- {name: schema, type: String, description: 'Sets the query context to the given schema.
+    If None, the query must explicitly reference to schemata and catalogs. If set,
+    also a catalog must be set. Example: "public".', optional: true}
+outputs:
+- {name: dataframe, type: String}
+implementation:
+  container:
+    image: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest
+    command:
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp)
+      printf "%s" "$0" > "$program_path"
+      python3 -u "$program_path" "$@"
+    - |
+      def _make_parent_dirs_and_return_path(file_path: str):
+          import os
+          os.makedirs(os.path.dirname(file_path), exist_ok=True)
+          return file_path
+
+      def load_dataframe_via_trino(
+          query,
+          dataframe_file,
+          columns_query = None,
+          host = "trino.trino",
+          port = 8080,
+          user = "anybody",
+          catalog = None,
+          schema = None,
+      ):
+          """
+          Load a Pandas Dataframe using Trino as SQL client.
+
+                  Parameters:
+                          query: An ANSI SQL compliant query for data, as supported by Trino. Queries can either use explicit or implicit references to schemata and catalogs. In the implicit case, the parameters catalog and schema must be set. Example: "SELECT * FROM transactions OFFSET 20".
+                          columns_query: An ANSI SQL compliant "SHOW COLUMNS" query for data columns, as supported by Trino. Queries can either use explicit or implicit references to schemata and catalogs. In the implicit case, the parameters catalog and schema must be set. If not set, generic column names are used. Example: "SHOW COLUMNS FROM postgresql.public.transactions".
+                          host: Host of the trino installation, typically the trino service in the trino namespace. Example:  "trino.trino".
+                          port: Trino service port. Example: "8080".
+                          user: Sets the query context to the given user. The user needs permissions to access the targeted catalog and schema. Example: "anybody".
+                          catalog: Sets the query context to the given catalog. If None, the query must explicitly reference to schemata and catalogs. If set, also a schema must be set. Example: "postgresql".
+                          schema: Sets the query context to the given schema. If None, the query must explicitly reference to schemata and catalogs. If set, also a catalog must be set. Example: "public".
+                  Returns:
+                          dataframe_file: A Pandas dataframe containing the query results.
+          """
+          import logging
+          import pandas as pd
+          import sys
+          from trino.dbapi import Connection
+
+          logging.basicConfig(
+              stream=sys.stdout,
+              level=logging.INFO,
+              format="%(levelname)s %(asctime)s: %(message)s",
+          )
+
+          if (catalog is not None and schema is None) or (
+              catalog is None and schema is not None
+          ):
+              raise Exception(
+                  f"If you set one, you need to set both: catalog={catalog} but schema={schema}!"
+              )
+
+          logging.info("Establishing Trino connection...")
+          with Connection(
+              host=host,
+              port=port,
+              user=user,
+              catalog=catalog,
+              schema=schema,
+          ) as conn:
+              cursor = conn.cursor()
+
+              logging.info("Querying data...")
+              cursor.execute(query)
+              dataframe = pd.DataFrame(cursor.fetchall())
+              logging.info(f"Retrieved {len(dataframe)} rows.")
+
+              if columns_query is not None:
+                  logging.info("Querying column names...")
+                  cursor.execute(columns_query)
+                  columns_dataframe = pd.DataFrame(cursor.fetchall())
+                  columns = columns_dataframe[0].values.tolist()
+                  dataframe.columns = columns
+                  logging.info(f"Found columns: {columns}")
+
+          # Feather outperforms Pickle & Parquet
+          # See https://towardsdatascience.com/the-best-format-to-save-pandas-data-414dca023e0d
+          dataframe.to_feather(dataframe_file)
+          logging.info("Finished.")
+
+      import argparse
+      _parser = argparse.ArgumentParser(prog='Load dataframe via trino', description='Load a Pandas Dataframe using Trino as SQL client.')
+      _parser.add_argument("--query", dest="query", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--columns-query", dest="columns_query", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--host", dest="host", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--port", dest="port", type=int, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--user", dest="user", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--catalog", dest="catalog", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--schema", dest="schema", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--dataframe", dest="dataframe_file", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
+      _parsed_args = vars(_parser.parse_args())
+
+      _outputs = load_dataframe_via_trino(**_parsed_args)
+    args:
+    - --query
+    - {inputValue: query}
+    - if:
+        cond: {isPresent: columns_query}
+        then:
+        - --columns-query
+        - {inputValue: columns_query}
+    - if:
+        cond: {isPresent: host}
+        then:
+        - --host
+        - {inputValue: host}
+    - if:
+        cond: {isPresent: port}
+        then:
+        - --port
+        - {inputValue: port}
+    - if:
+        cond: {isPresent: user}
+        then:
+        - --user
+        - {inputValue: user}
+    - if:
+        cond: {isPresent: catalog}
+        then:
+        - --catalog
+        - {inputValue: catalog}
+    - if:
+        cond: {isPresent: schema}
+        then:
+        - --schema
+        - {inputValue: schema}
+    - --dataframe
+    - {outputPath: dataframe}

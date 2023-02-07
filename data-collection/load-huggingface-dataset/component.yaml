@@ -1,4 +1,4 @@
-name: Load dataset
+name: Load huggingface dataset
 description: Load a Huggingface Dataset.
 inputs:
 - {name: path, type: String, description: 'Path from which to load the dataset. Huggingfaces
@@ -28,7 +28,7 @@ implementation:
           os.makedirs(os.path.dirname(file_path), exist_ok=True)
           return file_path
 
-      def load_dataset(
+      def load_huggingface_dataset(
           path,
           dataset_dir,
           configuration = "",
@@ -117,7 +117,7 @@ implementation:
 
       import json
       import argparse
-      _parser = argparse.ArgumentParser(prog='Load dataset', description='Load a Huggingface Dataset.')
+      _parser = argparse.ArgumentParser(prog='Load huggingface dataset', description='Load a Huggingface Dataset.')
       _parser.add_argument("--path", dest="path", type=str, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--configuration", dest="configuration", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--label-columns", dest="label_columns", type=json.loads, required=False, default=argparse.SUPPRESS)
@@ -126,7 +126,7 @@ implementation:
       _parsed_args = vars(_parser.parse_args())
       _output_files = _parsed_args.pop("_output_paths", [])
 
-      _outputs = load_dataset(**_parsed_args)
+      _outputs = load_huggingface_dataset(**_parsed_args)
 
       _output_serializers = [
           _serialize_json,
