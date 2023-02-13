@@ -36,7 +36,7 @@ implementation:
           dataset['target'] = y
 
           Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-          dataset.to_csv(output_path)
+          dataset.to_csv(output_path, index=False)
 
       import argparse
       _parser = argparse.ArgumentParser(prog='Download data', description='')

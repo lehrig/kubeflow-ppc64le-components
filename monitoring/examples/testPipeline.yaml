@@ -2,7 +2,7 @@ apiVersion: argoproj.io/v1alpha1
 kind: Workflow
 metadata:
   generateName: test-pipeline-
-  annotations: {pipelines.kubeflow.org/kfp_sdk_version: 1.8.18, pipelines.kubeflow.org/pipeline_compilation_time: '2023-01-30T16:19:28.110355',
+  annotations: {pipelines.kubeflow.org/kfp_sdk_version: 1.8.18, pipelines.kubeflow.org/pipeline_compilation_time: '2023-01-31T08:19:02.997988',
     pipelines.kubeflow.org/pipeline_spec: '{"name": "test-pipeline"}'}
   labels: {pipelines.kubeflow.org/kfp_sdk_version: 1.8.18}
 spec:
@@ -126,7 +126,7 @@ spec:
             dataset['target'] = y
 
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            dataset.to_csv(output_path)
+            dataset.to_csv(output_path, index=False)
 
         import argparse
         _parser = argparse.ArgumentParser(prog='Download data', description='')
@@ -149,14 +149,14 @@ spec:
           pandas as pd\n    from pathlib import Path\n\n    # Gets and split dataset\n    data
           = load_breast_cancer(as_frame=True)\n    X, y = data.data, data.target\n\n    dataset
           = X.copy(deep=True)\n    dataset[''target''] = y\n\n    Path(output_path).parent.mkdir(parents=True,
-          exist_ok=True)\n    dataset.to_csv(output_path)\n\nimport argparse\n_parser
+          exist_ok=True)\n    dataset.to_csv(output_path, index=False)\n\nimport argparse\n_parser
           = argparse.ArgumentParser(prog=''Download data'', description='''')\n_parser.add_argument(\"--output\",
           dest=\"output_path\", type=_make_parent_dirs_and_return_path, required=True,
           default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\n_outputs
           = download_data(**_parsed_args)\n"], "image": "quay.io/ibm/kubeflow-notebook-image-ppc64le:latest"}},
           "metadata": {"annotations": {"author": "Adam Shedivy"}}, "name": "Download
           data", "outputs": [{"name": "output", "type": "CSV"}]}', pipelines.kubeflow.org/component_ref: '{"digest":
-          "193c4e44e8c636b0dc310f845ae5fdb10fad3e0fdf7490047db30e65d69cd6c5", "url":
+          "32adb0ec4eb35259a6366d73195426a52c47d1d2ff2d610a2feb04e54f3d8e90", "url":
           "download_breast_cancer_data.yaml"}'}
       labels:
         pipelines.kubeflow.org/kfp_sdk_version: 1.8.18
