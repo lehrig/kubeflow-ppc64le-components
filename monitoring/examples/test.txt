@@ -1,3 +1,0 @@
-Training Accuracy: 1.00
-Validation Accuracy: 0.96
-Test Accuracy: 0.96
