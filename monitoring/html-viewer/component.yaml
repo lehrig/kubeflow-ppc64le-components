@@ -37,10 +37,6 @@ implementation:
               'type': 'web-app',
               'storage': 'inline',
               'source': html_content,
-              }, {
-              'type': 'web-app',
-              'storage': 'inline',
-              'source': '<h1>Hello, World!</h1>',
               }]
           }
 
