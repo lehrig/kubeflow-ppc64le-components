@@ -96,7 +96,7 @@ implementation:
       \        \"\"\"\n        _dataset_type = dataset_type.lower()\n\n        if\
       \ dataset is None:\n            return None\n        if _dataset_type not in\
       \ DATA_TYPES.keys():\n            raise KeyError(f\"Dataset type {_dataset_type}\
-      \ not supported by the data quality component\")\n        return DATA_TYPES[dataset_type.lower()](dataset,\
+      \ not supported by the data quality component\")\n        return DATA_TYPES[_dataset_type](dataset,\
       \ (args or {}))\n\n    # prepare datasets for DataQuality Report\n    df = process_dataset(dataset_dir,\
       \ args=additional_args)\n    ref_data = process_dataset(ref_dataset_dir, args=additional_args)\n\
       \n    report = Report(metrics=[\n        DataQualityPreset()\n    ])\n\n   \
