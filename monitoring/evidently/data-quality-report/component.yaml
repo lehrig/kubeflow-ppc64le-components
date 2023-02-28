@@ -1,13 +1,37 @@
 name: Data quality report
+description: Generate a data quality report for a given dataset.
 inputs:
-- {name: dataset_dir, type: String}
-- {name: dataset_type, type: String, default: df, optional: true}
-- {name: ref_dataset_dir, type: String, optional: true}
-- {name: additional_args, type: JsonObject, optional: true}
-- {name: column_mapping, type: JsonObject, optional: true}
+- {name: dataset_dir, type: String, description: Path to the directory containing
+    the dataset.}
+- name: dataset_type
+  description: |-
+    Type of the dataset. Must be one of 'df', 'csv', or 'huggingface'.
+    Defaults to 'df'.
+  default: df
+  optional: true
+- name: ref_dataset_dir
+  type: String
+  description: |-
+    Path to the directory containing a reference dataset for comparison.
+    Defaults to None.
+  optional: true
+- name: additional_args
+  type: JsonObject
+  description: |-
+    Additional arguments to be passed to the dataset processing function.
+    Defaults to None.
+  optional: true
+- name: column_mapping
+  type: JsonObject
+  description: |-
+    Mapping of columns between the current and reference datasets.
+    Defaults to None.
+  optional: true
 outputs:
-- {name: output_dir, type: String}
-- {name: mlpipeline_ui_metadata, type: String}
+- {name: output_dir, type: String, description: Path to the directory where the report
+    HTML file will be saved.}
+- {name: mlpipeline_ui_metadata, description: Path to the file where the metadata
+    for the ML Pipeline UI will be saved.}
 implementation:
   container:
     image: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest
@@ -23,89 +47,81 @@ implementation:
       program_path=$(mktemp)
       printf "%s" "$0" > "$program_path"
       python3 -u "$program_path" "$@"
-    - |
-      def _make_parent_dirs_and_return_path(file_path: str):
-          import os
-          os.makedirs(os.path.dirname(file_path), exist_ok=True)
-          return file_path
-
-      def data_quality_report(
-          dataset_dir,
-          output_dir,
-          mlpipeline_ui_metadata_path,
-          dataset_type = 'df',
-          ref_dataset_dir = None,
-          additional_args = None,
-          column_mapping = None
-
-      ):
-
-          import pandas as pd
-          import os
-          import json
-          from evidently.metric_preset import DataQualityPreset
-          from evidently.report import Report
-          from pathlib import Path
-
-          def _process_dataframe(dataset, opt_args=None):
-              return pd.read_pickle(dataset, **opt_args)
-
-          def _process_csv(dataset, opt_args=None):
-              return pd.read_csv(dataset, **opt_args)
-
-          def _process_huggingface(dataset, opt_args=None):
-              return pd.DataFrame(dataset, **opt_args)
-
-          DATA_TYPES = {
-              'df': _process_dataframe,
-              'csv': _process_csv,
-              'huggingface': _process_huggingface
-          }
-
-          def process_dataset(dataset, args=None):
-              if dataset is None:
-                  return None
-              return DATA_TYPES[dataset_type.lower()](dataset, (args or {}))
-
-          df = process_dataset(dataset_dir, args=additional_args)
-          ref_data = process_dataset(ref_dataset_dir, args=additional_args)
-
-          report = Report(metrics=[
-              DataQualityPreset()
-          ])
-
-          report.run(current_data=df, reference_data=ref_data, column_mapping=column_mapping)
-
-          Path(output_dir).parent.mkdir(parents=True, exist_ok=True)
-          report.save_html(output_dir)
-
-          html = os.path.abspath(output_dir)
-          html_content = open(html, 'r').read()
-
-          metadata = {
-              'outputs' : [{
-              'type': 'web-app',
-              'storage': 'inline',
-              'source': html_content,
-              }]
-          }
-
-          with open(mlpipeline_ui_metadata_path, 'w') as f:
-              json.dump(metadata, f)
-
-      import json
-      import argparse
-      _parser = argparse.ArgumentParser(prog='Data quality report', description='')
-      _parser.add_argument("--dataset-dir", dest="dataset_dir", type=str, required=True, default=argparse.SUPPRESS)
-      _parser.add_argument("--dataset-type", dest="dataset_type", type=str, required=False, default=argparse.SUPPRESS)
-      _parser.add_argument("--ref-dataset-dir", dest="ref_dataset_dir", type=str, required=False, default=argparse.SUPPRESS)
-      _parser.add_argument("--additional-args", dest="additional_args", type=json.loads, required=False, default=argparse.SUPPRESS)
-      _parser.add_argument("--column-mapping", dest="column_mapping", type=json.loads, required=False, default=argparse.SUPPRESS)
-      _parser.add_argument("--output-dir", dest="output_dir", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
-      _parser.add_argument("--mlpipeline-ui-metadata", dest="mlpipeline_ui_metadata_path", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
-      _parsed_args = vars(_parser.parse_args())
-
-      _outputs = data_quality_report(**_parsed_args)
+    - "def _make_parent_dirs_and_return_path(file_path: str):\n    import os\n   \
+      \ os.makedirs(os.path.dirname(file_path), exist_ok=True)\n    return file_path\n\
+      \ndef data_quality_report(\n    dataset_dir,\n    output_dir,\n    mlpipeline_ui_metadata_path,\n\
+      \    dataset_type='df',\n    ref_dataset_dir = None,\n    additional_args =\
+      \ None,\n    column_mapping = None\n\n):\n    \"\"\"\n    Generate a data quality\
+      \ report for a given dataset.\n\n    Args:\n        dataset_dir (str): Path\
+      \ to the directory containing the dataset.\n        output_dir (str): Path to\
+      \ the directory where the report HTML file will be saved.\n        mlpipeline_ui_metadata_path\
+      \ (str): Path to the file where the metadata for the ML Pipeline UI will be\
+      \ saved.\n        dataset_type (str, optional): Type of the dataset. Must be\
+      \ one of 'df', 'csv', or 'huggingface'.\n            Defaults to 'df'.\n   \
+      \     ref_dataset_dir (str, optional): Path to the directory containing a reference\
+      \ dataset for comparison.\n            Defaults to None.\n        additional_args\
+      \ (dict, optional): Additional arguments to be passed to the dataset processing\
+      \ function.\n            Defaults to None.\n        column_mapping (dict, optional):\
+      \ Mapping of columns between the current and reference datasets.\n         \
+      \   Defaults to None.\n\n    Returns:\n        None: The function saves the\
+      \ report HTML file and metadata to disk.\n\n    Raises:\n        KeyError: If\
+      \ the `dataset_type` argument is not one of 'df', 'csv', or 'huggingface'.\n\
+      \    \"\"\"\n    import pandas as pd\n    import os\n    import json\n    from\
+      \ evidently.metric_preset import DataQualityPreset\n    from evidently.report\
+      \ import Report\n    from pathlib import Path\n\n    def _process_dataframe(dataset,\
+      \ opt_args=None):\n        \"\"\"\n        Process a Pandas DataFrame.\n\n \
+      \       Args:\n            dataset (str): Path to the DataFrame pickle file.\n\
+      \            opt_args (dict, optional): Additional arguments to be passed to\
+      \ `pd.read_pickle`.\n                Defaults to None.\n\n        Returns:\n\
+      \            pd.DataFrame: The processed DataFrame.\n        \"\"\"\n      \
+      \  return pd.read_pickle(dataset, **opt_args)\n\n    def _process_csv(dataset,\
+      \ opt_args=None):\n        \"\"\"\n        Process a CSV file.\n\n        Args:\n\
+      \            dataset (str): Path to the CSV file.\n            opt_args (dict,\
+      \ optional): Additional arguments to be passed to `pd.read_csv`.\n         \
+      \       Defaults to None.\n\n        Returns:\n            pd.DataFrame: The\
+      \ processed DataFrame.\n        \"\"\"\n        return pd.read_csv(dataset,\
+      \ **opt_args)\n\n    def _process_huggingface(dataset, opt_args=None):\n   \
+      \     \"\"\"\n        Process a Hugging Face dataset.\n\n        Args:\n   \
+      \         dataset (str): Path to the Hugging Face dataset.\n            opt_args\
+      \ (dict, optional): Additional arguments to be passed to `pd.DataFrame`.\n \
+      \               Defaults to None.\n\n        Returns:\n            pd.DataFrame:\
+      \ The processed DataFrame.\n        \"\"\"\n        return pd.DataFrame(dataset,\
+      \ **opt_args)\n\n    DATA_TYPES = {\n        'df': _process_dataframe,\n   \
+      \     'csv': _process_csv,\n        'huggingface': _process_huggingface\n  \
+      \  }\n\n    def process_dataset(dataset, args=None):\n        \"\"\"\n     \
+      \   Process a dataset based on its type.\n\n        Args:\n            dataset\
+      \ (str): Path to the dataset.\n            args (dict, optional): Additional\
+      \ arguments to be passed to the processing function.\n                Defaults\
+      \ to None.\n\n        Returns:\n            pd.DataFrame: The processed DataFrame.\n\
+      \        \"\"\"\n        _dataset_type = dataset_type.lower()\n\n        if\
+      \ dataset is None:\n            return None\n        if _dataset_type not in\
+      \ DATA_TYPES.keys():\n            raise KeyError(f\"Dataset type {_dataset_type}\
+      \ not supported by the data quality component\")\n        return DATA_TYPES[dataset_type.lower()](dataset,\
+      \ (args or {}))\n\n    # prepare datasets for DataQuality Report\n    df = process_dataset(dataset_dir,\
+      \ args=additional_args)\n    ref_data = process_dataset(ref_dataset_dir, args=additional_args)\n\
+      \n    report = Report(metrics=[\n        DataQualityPreset()\n    ])\n\n   \
+      \ # Generate Report using Evidently API \n    report.run(current_data=df, reference_data=ref_data,\n\
+      \               column_mapping=column_mapping)\n\n    # Save Report as HTML\n\
+      \    Path(output_dir).parent.mkdir(parents=True, exist_ok=True)\n    report.save_html(output_dir)\n\
+      \n    html = os.path.abspath(output_dir)\n    html_content = open(html, 'r').read()\n\
+      \n    metadata = {\n        'outputs': [{\n            'type': 'web-app',\n\
+      \            'storage': 'inline',\n            'source': html_content,\n   \
+      \     }]\n    }\n\n    # Output/ Endpoint: Write HTML content to Metadata UI\n\
+      \    with open(mlpipeline_ui_metadata_path, 'w') as f:\n        json.dump(metadata,\
+      \ f)\n\nimport json\nimport argparse\n_parser = argparse.ArgumentParser(prog='Data\
+      \ quality report', description='Generate a data quality report for a given dataset.')\n\
+      _parser.add_argument(\"--dataset-dir\", dest=\"dataset_dir\", type=str, required=True,\
+      \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--dataset-type\", dest=\"\
+      dataset_type\", type=str, required=False, default=argparse.SUPPRESS)\n_parser.add_argument(\"\
+      --ref-dataset-dir\", dest=\"ref_dataset_dir\", type=str, required=False, default=argparse.SUPPRESS)\n\
+      _parser.add_argument(\"--additional-args\", dest=\"additional_args\", type=json.loads,\
+      \ required=False, default=argparse.SUPPRESS)\n_parser.add_argument(\"--column-mapping\"\
+      , dest=\"column_mapping\", type=json.loads, required=False, default=argparse.SUPPRESS)\n\
+      _parser.add_argument(\"--output-dir\", dest=\"output_dir\", type=_make_parent_dirs_and_return_path,\
+      \ required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--mlpipeline-ui-metadata\"\
+      , dest=\"mlpipeline_ui_metadata_path\", type=_make_parent_dirs_and_return_path,\
+      \ required=True, default=argparse.SUPPRESS)\n_parsed_args = vars(_parser.parse_args())\n\
+      \n_outputs = data_quality_report(**_parsed_args)\n"
     args:
     - --dataset-dir
     - {inputPath: dataset_dir}
