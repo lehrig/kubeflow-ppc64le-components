@@ -5,6 +5,8 @@ inputs:
     hub for datasets is supported. Example: "Lehrig/Monkey-Species-Collection".'}
 - {name: configuration, type: String, description: 'Name of the dataset configuration
     to load. Example: "downsized".', default: '', optional: true}
+- {name: split, type: String, description: 'Split within the dataset. If None, all
+    splits are loaded as a DatasetDict. Example: "train",', optional: true}
 - {name: label_columns, type: 'typing.List[str]', description: 'Optional list of label
     column names to be fetched as optional, additional output. Example: ["label"].',
   optional: true}
@@ -32,6 +34,7 @@ implementation:
           path,
           dataset_dir,
           configuration = "",
+          split = None,
           label_columns = None,
       ):
           """
@@ -41,6 +44,7 @@ implementation:
                           path: Path from which to load the dataset. Huggingfaces hub for datasets is supported. Example: "Lehrig/Monkey-Species-Collection".
                           dataset_dir: Target directory where the dataset will be loaded to. Should be available as a mount from a PVC. Example: "/blackboard/dataset".
                           configuration: Name of the dataset configuration to load. Example: "downsized".
+                          split: Split within the dataset. If None, all splits are loaded as a DatasetDict. Example: "train",
                           label_columns: Optional list of label column names to be fetched as optional, additional output. Example: ["label"].
                   Returns:
                           labels: Dictionary mapping label columns to associated labels, if available. Empty dictionary otherwise. Example: {"labels": ["cat", "dog"]}
@@ -65,7 +69,7 @@ implementation:
           logging.info(
               f"Loading dataset from '{path}' using configuration '{configuration}'..."
           )
-          dataset = load_dataset(path, configuration)
+          dataset = load_dataset(path=path, name=configuration, split=split)
 
           logging.info("Reading image files into bytes...")
 
@@ -89,8 +93,9 @@ implementation:
           logging.info(os.listdir(dataset_dir))
 
           labels = dict()
-          if isinstance(dataset, DatasetDict):
-              dataset = next(iter(dataset.values()))
+          if label_columns is not None:
+              if isinstance(dataset, DatasetDict):
+                  dataset = next(iter(dataset.values()))
               for label_column in label_columns:
                   logging.info(f"Fetching labels from column '{label_column}'...")
                   labels[label_column] = dataset.features[label_column].names
@@ -120,6 +125,7 @@ implementation:
       _parser = argparse.ArgumentParser(prog='Load huggingface dataset', description='Load a Huggingface Dataset.')
       _parser.add_argument("--path", dest="path", type=str, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--configuration", dest="configuration", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--split", dest="split", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--label-columns", dest="label_columns", type=json.loads, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--dataset-dir", dest="dataset_dir", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("----output-paths", dest="_output_paths", type=str, nargs=1)
@@ -149,6 +155,11 @@ implementation:
         then:
         - --configuration
         - {inputValue: configuration}
+    - if:
+        cond: {isPresent: split}
+        then:
+        - --split
+        - {inputValue: split}
     - if:
         cond: {isPresent: label_columns}
         then:

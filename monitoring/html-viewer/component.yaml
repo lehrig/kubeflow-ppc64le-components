@@ -1,10 +1,10 @@
 name: View html
-metadata:
-  annotations: {author: Evidently AI}
+description: Renders a given HTML file via the Kubeflow Metadata UI.
 inputs:
-- {name: html, type: HTML}
+- {name: html, type: HTML, description: Path to the html file.}
 outputs:
-- {name: mlpipeline_ui_metadata}
+- {name: mlpipeline_ui_metadata, description: Path to the file where the metadata
+    for the ML Pipeline UI will be saved.}
 implementation:
   container:
     image: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest
@@ -25,26 +25,43 @@ implementation:
           html_path,
           mlpipeline_ui_metadata_path,
       ):
+          """
+          Renders a given HTML file via the Kubeflow Metadata UI.
 
-          import os
+          Args:
+              html_path (str): Path to the html file.
+              mlpipeline_ui_metadata_path (str): Path to the file where the metadata for the ML Pipeline UI will be saved.
+
+          Returns:
+              None: The function saves the metadata to disk.
+          """
+
           import json
+          import logging
+          import os
+          import sys
 
+          logging.info("Reading HTML file...")
           html = os.path.abspath(html_path)
-          html_content = open(html, 'r').read()
+          html_content = open(html, "r").read()
 
+          logging.info("Writing HTML content to Metadata UI...")
           metadata = {
-              'outputs' : [{
-              'type': 'web-app',
-              'storage': 'inline',
-              'source': html_content,
-              }]
+              "outputs": [
+                  {
+                      "type": "web-app",
+                      "storage": "inline",
+                      "source": html_content,
+                  }
+              ]
           }
-
-          with open(mlpipeline_ui_metadata_path, 'w') as f:
+          with open(mlpipeline_ui_metadata_path, "w") as f:
               json.dump(metadata, f)
 
+          logging.info("Finished.")
+
       import argparse
-      _parser = argparse.ArgumentParser(prog='View html', description='')
+      _parser = argparse.ArgumentParser(prog='View html', description='Renders a given HTML file via the Kubeflow Metadata UI.')
       _parser.add_argument("--html", dest="html_path", type=str, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--mlpipeline-ui-metadata", dest="mlpipeline_ui_metadata_path", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
       _parsed_args = vars(_parser.parse_args())
