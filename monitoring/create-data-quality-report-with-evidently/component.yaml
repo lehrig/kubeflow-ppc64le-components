@@ -1,0 +1,263 @@
+name: Create data quality report with evidently
+description: Generate a data quality report for a given dataset using Evidently AI.
+inputs:
+- {name: dataset_dir, type: String, description: Path to the directory containing
+    the dataset.}
+- name: dataset_type
+  description: |-
+    Type of the dataset. Must be one of 'csv', 'df' (dataframe via pickle), 'df/feather' (dataframe via feather), or 'huggingface'.
+    Defaults to 'df'.
+  default: df
+  optional: true
+- name: ref_dataset_dir
+  type: String
+  description: |-
+    Path to the directory containing a reference dataset for comparison.
+    Defaults to None.
+  optional: true
+- name: additional_args
+  type: JsonObject
+  description: |-
+    Additional arguments to be passed to the dataset processing function.
+    Defaults to None.
+  optional: true
+- name: column_mapping
+  type: JsonObject
+  description: |-
+    Mapping of columns between the current and reference datasets.
+    Defaults to None.
+  optional: true
+- {name: max_rows, type: Integer, description: 'Maximum number of rows to be used
+    for producing the report. If dataset is larger, the report only selects the first
+    max_rows rows of the dataset.', default: '10000', optional: true}
+outputs:
+- {name: output_dir, type: String, description: Path to the directory where the report
+    HTML file will be saved.}
+- {name: mlpipeline_ui_metadata, description: Path to the file where the metadata
+    for the ML Pipeline UI will be saved.}
+implementation:
+  container:
+    image: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest
+    command:
+    - sh
+    - -c
+    - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+      'evidently==0.2.6' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install
+      --quiet --no-warn-script-location 'evidently==0.2.6' --user) && "$0" "$@"
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp)
+      printf "%s" "$0" > "$program_path"
+      python3 -u "$program_path" "$@"
+    - |
+      def _make_parent_dirs_and_return_path(file_path: str):
+          import os
+          os.makedirs(os.path.dirname(file_path), exist_ok=True)
+          return file_path
+
+      def create_data_quality_report_with_evidently(
+          dataset_dir,
+          output_dir,
+          mlpipeline_ui_metadata_path,
+          dataset_type="df",
+          ref_dataset_dir = None,
+          additional_args = None,
+          column_mapping = None,
+          max_rows = 10000,
+      ):
+          """
+          Generate a data quality report for a given dataset using Evidently AI.
+
+          Args:
+              dataset_dir (str): Path to the directory containing the dataset.
+              output_dir (str): Path to the directory where the report HTML file will be saved.
+              mlpipeline_ui_metadata_path (str): Path to the file where the metadata for the ML Pipeline UI will be saved.
+              dataset_type (str, optional): Type of the dataset. Must be one of 'csv', 'df' (dataframe via pickle), 'df/feather' (dataframe via feather), or 'huggingface'.
+                  Defaults to 'df'.
+              ref_dataset_dir (str, optional): Path to the directory containing a reference dataset for comparison.
+                  Defaults to None.
+              additional_args (dict, optional): Additional arguments to be passed to the dataset processing function.
+                  Defaults to None.
+              column_mapping (dict, optional): Mapping of columns between the current and reference datasets.
+                  Defaults to None.
+              max_rows (int, optional): Maximum number of rows to be used for producing the report. If dataset is larger, the report only selects the first max_rows rows of the dataset.
+
+          Returns:
+              None: The function saves the report HTML file and metadata to disk.
+
+          Raises:
+              KeyError: If the `dataset_type` argument is not one of the supported datatypes stated in the dataset_type parameter.
+          """
+          from datasets import Array2D, Image, load_from_disk, Value
+          from evidently.metric_preset import DataQualityPreset
+          from evidently.report import Report
+          import hashlib
+          import json
+          import logging
+          import pandas as pd
+          from pathlib import Path
+          import sys
+
+          logging.basicConfig(
+              stream=sys.stdout,
+              level=logging.INFO,
+              format="%(levelname)s %(asctime)s: %(message)s",
+          )
+
+          def _process_dataframe(dataset_dir, opt_args=None):
+              return pd.read_pickle(dataset_dir, **opt_args)
+
+          def _process_dataframe_feather(dataset_dir, opt_args=None):
+              return pd.read_feather(dataset_dir, **opt_args)
+
+          def _process_csv(dataset_dir, opt_args=None):
+              return pd.read_csv(dataset_dir, **opt_args)
+
+          def _process_huggingface(dataset_dir, opt_args=None):
+              dataset = load_from_disk(dataset_dir)
+
+              if (opt_args is not None) and ("split" in opt_args):
+                  logging.info(f"Selecting split '{opt_args['split']}'...")
+                  dataset = dataset[opt_args["split"]]
+
+              def to_hash(encoded_text):
+                  hash_object = hashlib.md5(encoded_text)
+                  return hash_object.hexdigest()
+
+              def list_to_str(examples):
+                  for key in arrays:
+                      examples[key] = [
+                          to_hash("".join(str(value) for value in a_list).encode())
+                          for a_list in examples[key]
+                      ]
+
+                  for key in images:
+                      examples[key] = [
+                          to_hash(an_image.tobytes()) for an_image in examples[key]
+                      ]
+                  return examples
+
+              arrays = set()
+              images = set()
+              for key, feature in dataset.features.items():
+                  if isinstance(feature, Array2D):
+                      arrays.add(key)
+                  if isinstance(feature, Image):
+                      images.add(key)
+
+              copy_of_features = dataset.features.copy()
+              for feature in arrays:
+                  copy_of_features[feature] = Value(dtype="string", id=None)
+              for feature in images:
+                  copy_of_features[feature] = Value(dtype="string", id=None)
+
+              string_dataset = dataset.map(
+                  list_to_str,
+                  batched=True,
+                  batch_size=100,
+                  num_proc=1,
+                  keep_in_memory=True,
+                  features=copy_of_features,
+              )
+              return string_dataset.to_pandas()
+
+          DATA_TYPES = {
+              "csv": _process_csv,
+              "df": _process_dataframe,
+              "df/feather": _process_dataframe_feather,
+              "huggingface": _process_huggingface,
+          }
+
+          def process_dataset(dataset_dir, args=None):
+              _dataset_type = dataset_type.lower()
+
+              if dataset_dir is None:
+                  return None
+              if _dataset_type not in DATA_TYPES.keys():
+                  raise KeyError(
+                      f"Dataset type {_dataset_type} not supported by the data quality component"
+                  )
+
+              dataset = DATA_TYPES[_dataset_type](dataset_dir, (args or {}))
+
+              if max_rows is not None:
+                  dataset = dataset.head(max_rows)
+              return dataset
+
+          logging.info("Preparing datasets for data quality report...")
+          df = process_dataset(dataset_dir, args=additional_args)
+          ref_data = process_dataset(ref_dataset_dir, args=additional_args)
+
+          report = Report(metrics=[DataQualityPreset()])
+
+          logging.info("Generating report using Evidently...")
+          report.run(current_data=df, reference_data=ref_data, column_mapping=column_mapping)
+
+          logging.info("Saving report as HTML...")
+          Path(output_dir).parent.mkdir(parents=True, exist_ok=True)
+          report.save_html(output_dir)
+
+          logging.info("Writing HTML content to Metadata UI...")
+          html_content = open(output_dir, "r").read()
+          metadata = {
+              "outputs": [
+                  {
+                      "type": "web-app",
+                      "storage": "inline",
+                      "source": html_content,
+                  }
+              ]
+          }
+
+          with open(mlpipeline_ui_metadata_path, "w") as f:
+              json.dump(metadata, f)
+
+          logging.info("Finished.")
+
+      import json
+      import argparse
+      _parser = argparse.ArgumentParser(prog='Create data quality report with evidently', description='Generate a data quality report for a given dataset using Evidently AI.')
+      _parser.add_argument("--dataset-dir", dest="dataset_dir", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--dataset-type", dest="dataset_type", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--ref-dataset-dir", dest="ref_dataset_dir", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--additional-args", dest="additional_args", type=json.loads, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--column-mapping", dest="column_mapping", type=json.loads, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--max-rows", dest="max_rows", type=int, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--output-dir", dest="output_dir", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--mlpipeline-ui-metadata", dest="mlpipeline_ui_metadata_path", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
+      _parsed_args = vars(_parser.parse_args())
+
+      _outputs = create_data_quality_report_with_evidently(**_parsed_args)
+    args:
+    - --dataset-dir
+    - {inputPath: dataset_dir}
+    - if:
+        cond: {isPresent: dataset_type}
+        then:
+        - --dataset-type
+        - {inputValue: dataset_type}
+    - if:
+        cond: {isPresent: ref_dataset_dir}
+        then:
+        - --ref-dataset-dir
+        - {inputPath: ref_dataset_dir}
+    - if:
+        cond: {isPresent: additional_args}
+        then:
+        - --additional-args
+        - {inputValue: additional_args}
+    - if:
+        cond: {isPresent: column_mapping}
+        then:
+        - --column-mapping
+        - {inputValue: column_mapping}
+    - if:
+        cond: {isPresent: max_rows}
+        then:
+        - --max-rows
+        - {inputValue: max_rows}
+    - --output-dir
+    - {outputPath: output_dir}
+    - --mlpipeline-ui-metadata
+    - {outputPath: mlpipeline_ui_metadata}
