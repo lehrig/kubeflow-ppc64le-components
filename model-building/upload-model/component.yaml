@@ -2,11 +2,12 @@ name: Upload model
 description: Uploads a model file to MinIO artifact store.
 inputs:
 - {name: file_dir, type: String}
-- {name: minio_url, type: String, default: 'minio-service.kubeflow:9000', optional: true}
+- {name: project_name, type: String}
+- {name: minio_url, type: String, default: 'http://minio-service.kubeflow:9000', optional: true}
 - {name: minio_secret, type: String, default: mlpipeline-minio-artifact, optional: true}
-- {name: export_bucket, type: String, default: models, optional: true}
-- {name: model_name, type: String, default: my-model, optional: true}
-- {name: model_version, type: Integer, default: '1', optional: true}
+- {name: export_bucket, type: String, default: projects, optional: true}
+- {name: model_name, type: String, default: model, optional: true}
+- {name: model_version, type: Integer, default: '0', optional: true}
 - {name: model_format, type: String, default: onnx, optional: true}
 outputs:
 - {name: s3_address, type: String}
@@ -24,28 +25,28 @@ implementation:
     - |
       def upload_model(
           file_dir,
-          minio_url = "minio-service.kubeflow:9000",
+          project_name,
+          minio_url = "http://minio-service.kubeflow:9000",
           minio_secret = "mlpipeline-minio-artifact",
-          export_bucket = "models",
-          model_name = "my-model",
-          model_version = 1,
+          export_bucket = "projects",
+          model_name = "model",
+          model_version = 0,
           model_format = "onnx",
       ):
           """Uploads a model file to MinIO artifact store."""
 
+          import boto3
+          import botocore
+          from botocore.client import Config
           from collections import namedtuple
-          from kubernetes import (
-              client,
-              config
-          )
+          from kubernetes import client, config
           import logging
-          from minio import Minio
           import sys
 
           logging.basicConfig(
               stream=sys.stdout,
               level=logging.INFO,
-              format='%(levelname)s %(asctime)s: %(message)s'
+              format="%(levelname)s %(asctime)s: %(message)s",
           )
           logger = logging.getLogger()
 
@@ -59,50 +60,97 @@ implementation:
                       return f.read()
 
               def decode(text):
-                  return base64.b64decode(text).decode('utf-8')
+                  return base64.b64decode(text).decode("utf-8")
 
               config.load_incluster_config()
               api_client = client.ApiClient()
 
               try:
-                  secret = client.CoreV1Api(api_client).read_namespaced_secret(minio_secret, get_current_namespace())
+                  secret = client.CoreV1Api(api_client).read_namespaced_secret(
+                      minio_secret, get_current_namespace()
+                  )
 
-                  minio_user = decode(secret.data['accesskey'])
-                  minio_pass = decode(secret.data['secretkey'])
+                  minio_user = decode(secret.data["accesskey"])
+                  minio_pass = decode(secret.data["secretkey"])
 
-                  return Minio(minio_url,
-                               access_key=minio_user,
-                               secret_key=minio_pass,
-                               secure=False)
+                  return boto3.session.Session().resource(
+                      service_name="s3",
+                      endpoint_url=minio_url,
+                      aws_access_key_id=minio_user,
+                      aws_secret_access_key=minio_pass,
+                      config=Config(signature_version="s3v4"),
+                  )
               except ApiException as e:
                   if e.status == 404:
-                      logger.error("Failed to get secret 'mlpipeline-minio-artifact', which is needed for communicating with MinIO!")
+                      logger.error(
+                          "Failed to get secret 'mlpipeline-minio-artifact', which is needed for communicating with MinIO!"
+                      )
                   raise Exception(e)
+
+          # see: https://stackoverflow.com/a/47565719/2625096
+          def bucket_exists(minio_client, bucket):
+              try:
+                  minio_client.meta.client.head_bucket(Bucket=bucket.name)
+                  return True
+              except botocore.exceptions.ClientError as e:
+                  error_code = int(e.response["Error"]["Code"])
+                  if error_code == 403:
+                      # Forbidden Access -> Private Bucket
+                      return True
+                  elif error_code == 404:
+                      return False
+
+          # see: https://stackoverflow.com/questions/57957585/how-to-check-if-a-particular-directory-exists-in-s3-bucket-using-python-and-boto
+          def folder_exists(minio_client, bucket, path):
+              path = path.rstrip("/")
+              resp = minio_client.meta.client.list_objects_v2(
+                  Bucket=bucket.name, Prefix=path, Delimiter="/", MaxKeys=1
+              )
+              return "CommonPrefixes" in resp
+
+          def get_versions(minio_client, bucket, path):
+              from pathlib import Path
+
+              path = path.rstrip("/")
+              response = minio_client.meta.client.list_objects_v2(
+                  Bucket=bucket.name, Prefix=path
+              )
+              versions = set()
+              for content in response.get("Contents", []):
+                  versions.add(int(Path(content["Key"]).parts[2]))
+              return versions
 
           logger.info(f"Establishing MinIO connection to '{minio_url}'...")
           minio_client = get_minio_client(minio_secret)
 
           # Create export bucket if it does not yet exist
-          response = minio_client.list_buckets()
-          export_bucket_exists = False
-          for bucket in response:
-              if bucket.name == export_bucket:
-                  export_bucket_exists = True
-
-          if not export_bucket_exists:
+          bucket = minio_client.Bucket(export_bucket)
+          if not bucket_exists(minio_client, bucket):
               logger.info(f"Creating bucket '{export_bucket}'...")
-              minio_client.make_bucket(bucket_name=export_bucket)
+              minio_client.create_bucket(Bucket=bucket.name)
+
+          if model_version == 0:
+              logger.info("Determinig model version...")
+
+              if not folder_exists(minio_client, bucket, project_name):
+                  logger.info("First-time deployment -> model version: 1")
+                  model_version = 1
+              else:
+                  versions = get_versions(
+                      minio_client, bucket, f"{project_name}/{model_name}"
+                  )
+                  model_version = max(versions) + 1
+                  logger.info(f"Model version: {model_version}")
 
           model_path = f"{model_name}/{model_version}/model.{model_format}"
-          s3_address = f"s3://{minio_url}/{export_bucket}/{model_format}"
+          s3_address = f"{minio_url}/{export_bucket}/{project_name}"
           triton_s3_address = f"{s3_address}/{model_path}"
 
-          logger.info(f"Saving onnx file to MinIO (s3 address: {s3_address})...")
-          minio_client.fput_object(
-              bucket_name=export_bucket,  # bucket name in Minio
-              object_name=f"{model_format}/{model_path}",  # file name in bucket of Minio / for Triton name MUST be model.onnx!
-              file_path=file_dir,  # file path / name in local system
-          )
+          logger.info("Saving onnx file to MinIO...")
+          logger.info(f"s3 address: {s3_address}")
+          logger.info(f"triton address: {triton_s3_address}")
+          # file name in bucket of Minio / for Triton name MUST be model.onnx!
+          bucket.upload_file(file_dir, f"{project_name}/{model_path}")
 
           logger.info("Finished.")
           out_tuple = namedtuple("UploadOutput", ["s3_address", "triton_s3_address"])
@@ -117,6 +165,7 @@ implementation:
       import argparse
       _parser = argparse.ArgumentParser(prog='Upload model', description='Uploads a model file to MinIO artifact store.')
       _parser.add_argument("--file-dir", dest="file_dir", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--project-name", dest="project_name", type=str, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--minio-url", dest="minio_url", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--minio-secret", dest="minio_secret", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--export-bucket", dest="export_bucket", type=str, required=False, default=argparse.SUPPRESS)
@@ -146,6 +195,8 @@ implementation:
     args:
     - --file-dir
     - {inputPath: file_dir}
+    - --project-name
+    - {inputValue: project_name}
     - if:
         cond: {isPresent: minio_url}
         then:
