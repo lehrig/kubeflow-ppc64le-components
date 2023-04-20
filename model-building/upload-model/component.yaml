@@ -6,7 +6,6 @@ inputs:
 - {name: minio_url, type: String, default: 'http://minio-service.kubeflow:9000', optional: true}
 - {name: minio_secret, type: String, default: mlpipeline-minio-artifact, optional: true}
 - {name: export_bucket, type: String, default: projects, optional: true}
-- {name: model_name, type: String, default: model, optional: true}
 - {name: model_version, type: Integer, default: '0', optional: true}
 - {name: model_format, type: String, default: onnx, optional: true}
 outputs:
@@ -29,7 +28,6 @@ implementation:
           minio_url = "http://minio-service.kubeflow:9000",
           minio_secret = "mlpipeline-minio-artifact",
           export_bucket = "projects",
-          model_name = "model",
           model_version = 0,
           model_format = "onnx",
       ):
@@ -129,6 +127,7 @@ implementation:
               logger.info(f"Creating bucket '{export_bucket}'...")
               minio_client.create_bucket(Bucket=bucket.name)
 
+          model_dir_name = "model"
           if model_version == 0:
               logger.info("Determinig model version...")
 
@@ -137,12 +136,12 @@ implementation:
                   model_version = 1
               else:
                   versions = get_versions(
-                      minio_client, bucket, f"{project_name}/{model_name}"
+                      minio_client, bucket, f"{project_name}/{model_dir_name}"
                   )
                   model_version = max(versions) + 1
                   logger.info(f"Model version: {model_version}")
 
-          model_path = f"{model_name}/{model_version}/model.{model_format}"
+          model_path = f"{model_dir_name}/{model_version}/model.{model_format}"
           s3_address = f"{minio_url}/{export_bucket}/{project_name}"
           triton_s3_address = f"{s3_address}/{model_path}"
 
@@ -169,7 +168,6 @@ implementation:
       _parser.add_argument("--minio-url", dest="minio_url", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--minio-secret", dest="minio_secret", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--export-bucket", dest="export_bucket", type=str, required=False, default=argparse.SUPPRESS)
-      _parser.add_argument("--model-name", dest="model_name", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--model-version", dest="model_version", type=int, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--model-format", dest="model_format", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("----output-paths", dest="_output_paths", type=str, nargs=2)
@@ -212,11 +210,6 @@ implementation:
         then:
         - --export-bucket
         - {inputValue: export_bucket}
-    - if:
-        cond: {isPresent: model_name}
-        then:
-        - --model-name
-        - {inputValue: model_name}
     - if:
         cond: {isPresent: model_version}
         then:
