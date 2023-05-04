@@ -22,3 +22,4 @@ plot_confusion_matrix_comp = load_component("model-building/plot-confusion-matri
 convert_model_to_onnx_comp = load_component("model-building/convert-to-onnx")
 upload_model_comp = load_component("model-building/upload-model")
 deploy_model_with_kserve_comp = load_component("model-deployment/deploy-model-with-kserve")
+convert_speech_to_text_comp = load_component("data-transformation/convert-speech-to-text")

@@ -5,6 +5,7 @@ inputs:
 - {name: audio_dir, type: String, description: Directory where to load data from.}
 - {name: model_type, type: String, description: Whisper model to load. Defaults to
     'base'., default: base, optional: true}
+- {name: limit, type: int, description: Subset size to limit the number of transcriptions. Defaults to 100., default: 100, optional: true}
 outputs:
 - {name: texts, type: String, description: File to which transcribed texts will be
     written.}
@@ -62,7 +63,7 @@ implementation:
           device = "cuda" if torch.cuda.is_available() else "cpu"
           logger.info(f"Running on {device}")
 
-          dataset = load_from_disk(audio_dir).select(range(100))
+          dataset = load_from_disk(audio_dir).select(range(limit))
           model = whisper.load_model(model_type, device=device)
           len_ds = len(dataset)
           logger.info(f"Loaded model and data ({len_ds} records). Transcription starts...")
@@ -104,6 +105,7 @@ implementation:
       _parser = argparse.ArgumentParser(prog='Convert speech to text', description="Transcribes speech audio files stored as part of a Huggingface Dataset to text using OpenAI's Whisper model")
       _parser.add_argument("--audio-dir", dest="audio_dir", type=str, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--model-type", dest="model_type", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--limit", dest="limit", type=int, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--texts", dest="texts_file", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
       _parsed_args = vars(_parser.parse_args())
 
@@ -116,5 +118,10 @@ implementation:
         then:
         - --model-type
         - {inputValue: model_type}
+    - if:
+        cond: {isPresent: limit}
+        then:
+        - --limit
+        - {inputValue: limit}
     - --texts
     - {outputPath: texts}
