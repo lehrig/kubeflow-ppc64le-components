@@ -1,0 +1,127 @@
+name: Convert speech to text
+description: Transcribes speech audio files stored as part of a Huggingface Dataset
+  to text using OpenAI's Whisper model
+inputs:
+- {name: audio_dir, type: String, description: Directory where to load data from.}
+- {name: model_type, type: String, description: Whisper model to load. Defaults to
+    'base'., default: base, optional: true}
+- {name: limit, type: int, description: Subset size to limit the number of transcriptions. Defaults to 100., default: 100, optional: true}
+outputs:
+- {name: texts, type: String, description: File to which transcribed texts will be
+    written.}
+implementation:
+  container:
+    image: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest
+    command:
+    - sh
+    - -c
+    - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+      'openai-whisper' 'nltk' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install
+      --quiet --no-warn-script-location 'openai-whisper' 'nltk' --user) && "$0" "$@"
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp)
+      printf "%s" "$0" > "$program_path"
+      python3 -u "$program_path" "$@"
+    - |
+      def _make_parent_dirs_and_return_path(file_path: str):
+          import os
+          os.makedirs(os.path.dirname(file_path), exist_ok=True)
+          return file_path
+
+      def convert_speech_to_text(
+          audio_dir, texts_file, model_type = "base"
+      ):
+          """
+          Transcribes speech audio files stored as part of a Huggingface Dataset to text using OpenAI's Whisper model
+                  Parameters:
+                          audio_dir: Directory where to load data from.
+                          texts_file: File to which transcribed texts will be written.
+                          model_type: Whisper model to load. Defaults to 'base'.
+          """
+
+          import logging
+          import string
+          import sys
+          from pprint import pformat
+          from statistics import mean
+          import torch
+          import whisper
+          from datasets import load_from_disk
+          from nltk.translate.bleu_score import sentence_bleu, corpus_bleu, SmoothingFunction
+          from tqdm import tqdm
+          from tqdm.contrib.logging import tqdm_logging_redirect
+
+          logging.basicConfig(
+              stream=sys.stdout,
+              level=logging.INFO,
+              format="%(levelname)s %(asctime)s: %(message)s",
+          )
+          logger = logging.getLogger()
+
+          device = "cuda" if torch.cuda.is_available() else "cpu"
+          logger.info(f"Running on {device}")
+
+          dataset = load_from_disk(audio_dir).select(range(limit))
+          model = whisper.load_model(model_type, device=device)
+          len_ds = len(dataset)
+          logger.info(f"Loaded model and data ({len_ds} records). Transcription starts...")
+          texts = []
+          performance = []
+          misses = []
+          references = []
+          chencherry = SmoothingFunction()
+
+          with tqdm_logging_redirect():
+              for sample in tqdm(dataset, total=len_ds):
+                  audio = sample["audio"]["array"].astype("float32")
+                  result = model.transcribe(audio=audio)
+                  text = (
+                      result["text"]
+                      .lower()
+                      .translate(str.maketrans("", "", string.punctuation))
+                  )
+                  reference = [sample["transcription"].split()]
+                  references.append(reference)
+                  texts.append(text)
+                  performance.append(
+                      sentence_bleu(
+                          reference, text.split(), smoothing_function=chencherry.method1
+                      )
+                  )
+
+          logger.info(f"Average Sentence BLEU of transcriptions: {mean(performance)}")
+          logger.info(
+              f"Corpus BLEU across all transcriptions: {corpus_bleu(references, [text.split() for text in texts])}"
+          )
+
+          with open(texts_file, "w") as out:
+              out.writelines(texts)
+
+          logger.info(f"Finished. Transcriptions written to {texts_file}.")
+
+      import argparse
+      _parser = argparse.ArgumentParser(prog='Convert speech to text', description="Transcribes speech audio files stored as part of a Huggingface Dataset to text using OpenAI's Whisper model")
+      _parser.add_argument("--audio-dir", dest="audio_dir", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--model-type", dest="model_type", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--limit", dest="limit", type=int, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--texts", dest="texts_file", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
+      _parsed_args = vars(_parser.parse_args())
+
+      _outputs = convert_speech_to_text(**_parsed_args)
+    args:
+    - --audio-dir
+    - {inputPath: audio_dir}
+    - if:
+        cond: {isPresent: model_type}
+        then:
+        - --model-type
+        - {inputValue: model_type}
+    - if:
+        cond: {isPresent: limit}
+        then:
+        - --limit
+        - {inputValue: limit}
+    - --texts
+    - {outputPath: texts}
