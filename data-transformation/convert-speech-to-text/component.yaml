@@ -1,11 +1,12 @@
 name: Convert speech to text
 description: Transcribes speech audio files stored as part of a Huggingface Dataset
-  to text using OpenAI's Whisper model
+  to text using the Whisper model of OpenAI.
 inputs:
 - {name: audio_dir, type: String, description: Directory where to load data from.}
-- {name: model_type, type: String, description: Whisper model to load. Defaults to
-    'base'., default: base, optional: true}
-- {name: limit, type: int, description: Subset size to limit the number of transcriptions. Defaults to 100., default: 100, optional: true}
+- {name: model_type, type: String, description: Whisper model to load., default: base,
+  optional: true}
+- {name: limit, type: Integer, description: Subset size to limit the number of transcriptions.,
+  default: '100', optional: true}
 outputs:
 - {name: texts, type: String, description: File to which transcribed texts will be
     written.}
@@ -31,14 +32,19 @@ implementation:
           return file_path
 
       def convert_speech_to_text(
-          audio_dir, texts_file, model_type = "base"
+          audio_dir,
+          texts_file,
+          model_type = "base",
+          limit = 100,
       ):
           """
-          Transcribes speech audio files stored as part of a Huggingface Dataset to text using OpenAI's Whisper model
+          Transcribes speech audio files stored as part of a Huggingface Dataset to text using the Whisper model of OpenAI.
+
                   Parameters:
                           audio_dir: Directory where to load data from.
                           texts_file: File to which transcribed texts will be written.
-                          model_type: Whisper model to load. Defaults to 'base'.
+                          model_type: Whisper model to load.
+                          limit: Subset size to limit the number of transcriptions.
           """
 
           import logging
@@ -69,7 +75,6 @@ implementation:
           logger.info(f"Loaded model and data ({len_ds} records). Transcription starts...")
           texts = []
           performance = []
-          misses = []
           references = []
           chencherry = SmoothingFunction()
 
@@ -102,7 +107,7 @@ implementation:
           logger.info(f"Finished. Transcriptions written to {texts_file}.")
 
       import argparse
-      _parser = argparse.ArgumentParser(prog='Convert speech to text', description="Transcribes speech audio files stored as part of a Huggingface Dataset to text using OpenAI's Whisper model")
+      _parser = argparse.ArgumentParser(prog='Convert speech to text', description='Transcribes speech audio files stored as part of a Huggingface Dataset to text using the Whisper model of OpenAI.')
       _parser.add_argument("--audio-dir", dest="audio_dir", type=str, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--model-type", dest="model_type", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--limit", dest="limit", type=int, required=False, default=argparse.SUPPRESS)
