@@ -1,4 +1,4 @@
-name: Load dataframe via trino
+name: Load Dataframe via Trino
 description: Load a Pandas Dataframe using Trino as SQL client.
 inputs:
 - {name: query, type: String, description: 'An ANSI SQL compliant query for data,
@@ -42,7 +42,7 @@ implementation:
           os.makedirs(os.path.dirname(file_path), exist_ok=True)
           return file_path
 
-      def load_dataframe_via_trino(
+      def Load_Dataframe_via_Trino(
           query,
           dataframe_file,
           columns_query = None,
@@ -113,7 +113,7 @@ implementation:
           logging.info("Finished.")
 
       import argparse
-      _parser = argparse.ArgumentParser(prog='Load dataframe via trino', description='Load a Pandas Dataframe using Trino as SQL client.')
+      _parser = argparse.ArgumentParser(prog='Load Dataframe via Trino', description='Load a Pandas Dataframe using Trino as SQL client.')
       _parser.add_argument("--query", dest="query", type=str, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--columns-query", dest="columns_query", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--host", dest="host", type=str, required=False, default=argparse.SUPPRESS)
@@ -124,7 +124,7 @@ implementation:
       _parser.add_argument("--dataframe", dest="dataframe_file", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
       _parsed_args = vars(_parser.parse_args())
 
-      _outputs = load_dataframe_via_trino(**_parsed_args)
+      _outputs = Load_Dataframe_via_Trino(**_parsed_args)
     args:
     - --query
     - {inputValue: query}

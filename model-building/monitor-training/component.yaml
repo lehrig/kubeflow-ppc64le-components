@@ -1,4 +1,4 @@
-name: Monitor training
+name: Monitor Training
 description: Monitors a training job based on Tensorboard logs. Logs are expected
   to be written to the tensorboard_s3_address.
 inputs:
@@ -25,7 +25,7 @@ implementation:
           os.makedirs(os.path.dirname(file_path), exist_ok=True)
           return file_path
 
-      def monitor_training(
+      def Monitor_Training(
           mlpipeline_ui_metadata_path,
           monitor_bucket = "mlpipeline",
           monitor_folder = "tensorboard",
@@ -182,7 +182,7 @@ implementation:
           return str_value
 
       import argparse
-      _parser = argparse.ArgumentParser(prog='Monitor training', description='Monitors a training job based on Tensorboard logs. Logs are expected to be written to the tensorboard_s3_address.')
+      _parser = argparse.ArgumentParser(prog='Monitor Training', description='Monitors a training job based on Tensorboard logs. Logs are expected to be written to the tensorboard_s3_address.')
       _parser.add_argument("--monitor-bucket", dest="monitor_bucket", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--monitor-folder", dest="monitor_folder", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--mlpipeline-ui-metadata", dest="mlpipeline_ui_metadata_path", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
@@ -190,7 +190,7 @@ implementation:
       _parsed_args = vars(_parser.parse_args())
       _output_files = _parsed_args.pop("_output_paths", [])
 
-      _outputs = monitor_training(**_parsed_args)
+      _outputs = Monitor_Training(**_parsed_args)
 
       _output_serializers = [
           _serialize_str,

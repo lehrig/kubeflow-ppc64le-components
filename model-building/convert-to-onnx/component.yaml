@@ -1,4 +1,4 @@
-name: Convert model to onnx
+name: Convert Model to ONNX
 description: 'Converts a model to ONNX format. Supported input formats: Keras.'
 inputs:
 - {name: model_dir, type: String}
@@ -20,10 +20,7 @@ implementation:
           os.makedirs(os.path.dirname(file_path), exist_ok=True)
           return file_path
 
-      def convert_model_to_onnx(
-          model_dir,
-          onnx_model_dir
-      ):
+      def Convert_Model_to_ONNX(model_dir, onnx_model_dir):
           """Converts a model to ONNX format. Supported input formats: Keras."""
 
           import logging
@@ -35,7 +32,7 @@ implementation:
           logging.basicConfig(
               stream=sys.stdout,
               level=logging.INFO,
-              format='%(levelname)s %(asctime)s: %(message)s'
+              format="%(levelname)s %(asctime)s: %(message)s",
           )
           logger = logging.getLogger()
 
@@ -51,12 +48,12 @@ implementation:
           logger.info("Finished.")
 
       import argparse
-      _parser = argparse.ArgumentParser(prog='Convert model to onnx', description='Converts a model to ONNX format. Supported input formats: Keras.')
+      _parser = argparse.ArgumentParser(prog='Convert Model to ONNX', description='Converts a model to ONNX format. Supported input formats: Keras.')
       _parser.add_argument("--model-dir", dest="model_dir", type=str, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--onnx-model-dir", dest="onnx_model_dir", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
       _parsed_args = vars(_parser.parse_args())
 
-      _outputs = convert_model_to_onnx(**_parsed_args)
+      _outputs = Convert_Model_to_ONNX(**_parsed_args)
     args:
     - --model-dir
     - {inputPath: model_dir}

@@ -1,4 +1,4 @@
-name: Create data quality report with evidently
+name: Create Data Quality Report with Evidently
 description: Generate a data quality report for a given dataset using Evidently AI.
 inputs:
 - {name: dataset_dir, type: String, description: Path to the directory containing
@@ -56,7 +56,7 @@ implementation:
           os.makedirs(os.path.dirname(file_path), exist_ok=True)
           return file_path
 
-      def create_data_quality_report_with_evidently(
+      def Create_Data_Quality_Report_with_Evidently(
           dataset_dir,
           output_dir,
           mlpipeline_ui_metadata_path,
@@ -217,7 +217,7 @@ implementation:
 
       import json
       import argparse
-      _parser = argparse.ArgumentParser(prog='Create data quality report with evidently', description='Generate a data quality report for a given dataset using Evidently AI.')
+      _parser = argparse.ArgumentParser(prog='Create Data Quality Report with Evidently', description='Generate a data quality report for a given dataset using Evidently AI.')
       _parser.add_argument("--dataset-dir", dest="dataset_dir", type=str, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--dataset-type", dest="dataset_type", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--ref-dataset-dir", dest="ref_dataset_dir", type=str, required=False, default=argparse.SUPPRESS)
@@ -228,7 +228,7 @@ implementation:
       _parser.add_argument("--mlpipeline-ui-metadata", dest="mlpipeline_ui_metadata_path", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
       _parsed_args = vars(_parser.parse_args())
 
-      _outputs = create_data_quality_report_with_evidently(**_parsed_args)
+      _outputs = Create_Data_Quality_Report_with_Evidently(**_parsed_args)
     args:
     - --dataset-dir
     - {inputPath: dataset_dir}

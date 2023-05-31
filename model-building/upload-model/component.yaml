@@ -1,4 +1,4 @@
-name: Upload model
+name: Upload Model
 description: Uploads a model file to MinIO artifact store.
 inputs:
 - {name: file_dir, type: String}
@@ -22,7 +22,7 @@ implementation:
       printf "%s" "$0" > "$program_path"
       python3 -u "$program_path" "$@"
     - |
-      def upload_model(
+      def Upload_Model(
           file_dir,
           project_name,
           minio_url = "http://minio-service.kubeflow:9000",
@@ -162,7 +162,7 @@ implementation:
           return str_value
 
       import argparse
-      _parser = argparse.ArgumentParser(prog='Upload model', description='Uploads a model file to MinIO artifact store.')
+      _parser = argparse.ArgumentParser(prog='Upload Model', description='Uploads a model file to MinIO artifact store.')
       _parser.add_argument("--file-dir", dest="file_dir", type=str, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--project-name", dest="project_name", type=str, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--minio-url", dest="minio_url", type=str, required=False, default=argparse.SUPPRESS)
@@ -174,7 +174,7 @@ implementation:
       _parsed_args = vars(_parser.parse_args())
       _output_files = _parsed_args.pop("_output_paths", [])
 
-      _outputs = upload_model(**_parsed_args)
+      _outputs = Upload_Model(**_parsed_args)
 
       _output_serializers = [
           _serialize_str,

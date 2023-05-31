@@ -1,4 +1,4 @@
-name: Deploy model with kserve
+name: Deploy Model with KServe
 description: Deploys a model using KServe and Trino as backend.
 inputs:
 - {name: project_name, type: String, description: 'Name of the project. Must be unique
@@ -31,7 +31,7 @@ implementation:
       printf "%s" "$0" > "$program_path"
       python3 -u "$program_path" "$@"
     - |
-      def deploy_model_with_kserve(
+      def Deploy_Model_with_KServe(
           project_name,
           explainer_type = None,
           kserve_version = "v1beta1",
@@ -120,7 +120,7 @@ implementation:
               ),
               spec=V1beta1InferenceServiceSpec(
                   predictor=predictor_spec,
-                  explainer=explainer_spec if explainer_type else None
+                  explainer=explainer_spec if explainer_type else None,
               ),
           )
 
@@ -148,7 +148,7 @@ implementation:
           return str_value
 
       import argparse
-      _parser = argparse.ArgumentParser(prog='Deploy model with kserve', description='Deploys a model using KServe and Trino as backend.')
+      _parser = argparse.ArgumentParser(prog='Deploy Model with KServe', description='Deploys a model using KServe and Trino as backend.')
       _parser.add_argument("--project-name", dest="project_name", type=str, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--explainer-type", dest="explainer_type", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--kserve-version", dest="kserve_version", type=str, required=False, default=argparse.SUPPRESS)
@@ -158,7 +158,7 @@ implementation:
       _parsed_args = vars(_parser.parse_args())
       _output_files = _parsed_args.pop("_output_paths", [])
 
-      _outputs = deploy_model_with_kserve(**_parsed_args)
+      _outputs = Deploy_Model_with_KServe(**_parsed_args)
 
       _outputs = [_outputs]
 

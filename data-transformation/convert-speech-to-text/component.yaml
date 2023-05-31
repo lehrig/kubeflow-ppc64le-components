@@ -1,4 +1,4 @@
-name: Convert speech to text
+name: Convert Speech to Text with OpenAI Whisper
 description: Transcribes speech audio files stored as part of a Huggingface Dataset
   to text using the Whisper model of OpenAI.
 inputs:
@@ -31,7 +31,7 @@ implementation:
           os.makedirs(os.path.dirname(file_path), exist_ok=True)
           return file_path
 
-      def convert_speech_to_text(
+      def Convert_Speech_to_Text_with_OpenAI_Whisper(
           audio_dir,
           texts_file,
           model_type = "base",
@@ -107,14 +107,14 @@ implementation:
           logger.info(f"Finished. Transcriptions written to {texts_file}.")
 
       import argparse
-      _parser = argparse.ArgumentParser(prog='Convert speech to text', description='Transcribes speech audio files stored as part of a Huggingface Dataset to text using the Whisper model of OpenAI.')
+      _parser = argparse.ArgumentParser(prog='Convert Speech to Text with OpenAI Whisper', description='Transcribes speech audio files stored as part of a Huggingface Dataset to text using the Whisper model of OpenAI.')
       _parser.add_argument("--audio-dir", dest="audio_dir", type=str, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--model-type", dest="model_type", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--limit", dest="limit", type=int, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--texts", dest="texts_file", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
       _parsed_args = vars(_parser.parse_args())
 
-      _outputs = convert_speech_to_text(**_parsed_args)
+      _outputs = Convert_Speech_to_Text_with_OpenAI_Whisper(**_parsed_args)
     args:
     - --audio-dir
     - {inputPath: audio_dir}
