@@ -1,17 +1,15 @@
-name: Upload model
-description: Uploads a model file to MinIO artifact store.
+name: Upload explainer
+description: Uploads an explainer file to MinIO artifact store.
 inputs:
 - {name: file_dir, type: String}
 - {name: project_name, type: String}
+- {name: model_version, type: Integer}
 - {name: minio_url, type: String, default: 'http://minio-service.kubeflow:9000', optional: true}
 - {name: minio_secret, type: String, default: mlpipeline-minio-artifact, optional: true}
 - {name: export_bucket, type: String, default: projects, optional: true}
-- {name: model_version, type: Integer, default: '0', optional: true}
-- {name: model_format, type: String, default: onnx, optional: true}
 outputs:
 - {name: s3_address, type: String}
 - {name: triton_s3_address, type: String}
-- {name: model_version, type: Integer}
 implementation:
   container:
     image: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest
@@ -23,16 +21,15 @@ implementation:
       printf "%s" "$0" > "$program_path"
       python3 -u "$program_path" "$@"
     - |
-      def upload_model(
+      def upload_explainer(
           file_dir,
           project_name,
+          model_version,
           minio_url = "http://minio-service.kubeflow:9000",
           minio_secret = "mlpipeline-minio-artifact",
           export_bucket = "projects",
-          model_version = 0,
-          model_format = "onnx",
       ):
-          """Uploads a model file to MinIO artifact store."""
+          """Uploads an explainer file to MinIO artifact store."""
 
           import boto3
           import botocore
@@ -48,6 +45,14 @@ implementation:
               format="%(levelname)s %(asctime)s: %(message)s",
           )
           logger = logging.getLogger()
+
+          try:
+              model_version = int(model_version)
+          except ValueError as e:
+              logger.warning(
+                  "Could not parse model version. Continuing with default value 1..."
+              )
+              model_version = 1
 
           def get_minio_client(minio_secret):
               import base64
@@ -128,43 +133,23 @@ implementation:
               logger.info(f"Creating bucket '{export_bucket}'...")
               minio_client.create_bucket(Bucket=bucket.name)
 
-          model_dir_name = "model"
-          if model_version == 0:
-              logger.info("Determinig model version...")
-
-              if not folder_exists(minio_client, bucket, project_name):
-                  logger.info("First-time deployment -> model version: 1")
-                  model_version = 1
-              else:
-                  versions = get_versions(
-                      minio_client, bucket, f"{project_name}/{model_dir_name}"
-                  )
-                  model_version = max(versions) + 1
-                  logger.info(f"Model version: {model_version}")
-
-          model_path = f"{model_dir_name}/{model_version}/model.{model_format}"
+          explainer_path = f"explainer/{model_version}"
           s3_address = f"{minio_url}/{export_bucket}/{project_name}"
-          triton_s3_address = f"{s3_address}/{model_path}"
+          triton_s3_address = f"{s3_address}/{explainer_path}"
 
           logger.info("Saving onnx file to MinIO...")
           logger.info(f"s3 address: {s3_address}")
           logger.info(f"triton address: {triton_s3_address}")
-          # file name in bucket of Minio / for Triton name MUST be model.onnx!
-          bucket.upload_file(file_dir, f"{project_name}/{model_path}")
+          bucket.upload_file(
+              f"{file_dir}/explainer.dill", f"{project_name}/{explainer_path}/explainer.dill"
+          )
+          bucket.upload_file(
+              f"{file_dir}/meta.dill", f"{project_name}/{explainer_path}/meta.dill"
+          )
 
           logger.info("Finished.")
-          out_tuple = namedtuple(
-              "UploadOutput", ["s3_address", "triton_s3_address", "model_version"]
-          )
-          return out_tuple(s3_address, triton_s3_address, model_version)
-
-      def _serialize_int(int_value: int) -> str:
-          if isinstance(int_value, str):
-              return int_value
-          if not isinstance(int_value, int):
-              raise TypeError('Value "{}" has type "{}" instead of int.'.format(
-                  str(int_value), str(type(int_value))))
-          return str(int_value)
+          out_tuple = namedtuple("UploadOutput", ["s3_address", "triton_s3_address"])
+          return out_tuple(s3_address, triton_s3_address)
 
       def _serialize_str(str_value: str) -> str:
           if not isinstance(str_value, str):
@@ -173,24 +158,22 @@ implementation:
           return str_value
 
       import argparse
-      _parser = argparse.ArgumentParser(prog='Upload model', description='Uploads a model file to MinIO artifact store.')
+      _parser = argparse.ArgumentParser(prog='Upload explainer', description='Uploads an explainer file to MinIO artifact store.')
       _parser.add_argument("--file-dir", dest="file_dir", type=str, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--project-name", dest="project_name", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--model-version", dest="model_version", type=int, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--minio-url", dest="minio_url", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--minio-secret", dest="minio_secret", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--export-bucket", dest="export_bucket", type=str, required=False, default=argparse.SUPPRESS)
-      _parser.add_argument("--model-version", dest="model_version", type=int, required=False, default=argparse.SUPPRESS)
-      _parser.add_argument("--model-format", dest="model_format", type=str, required=False, default=argparse.SUPPRESS)
-      _parser.add_argument("----output-paths", dest="_output_paths", type=str, nargs=3)
+      _parser.add_argument("----output-paths", dest="_output_paths", type=str, nargs=2)
       _parsed_args = vars(_parser.parse_args())
       _output_files = _parsed_args.pop("_output_paths", [])
 
-      _outputs = upload_model(**_parsed_args)
+      _outputs = upload_explainer(**_parsed_args)
 
       _output_serializers = [
           _serialize_str,
           _serialize_str,
-          _serialize_int,
 
       ]
 
@@ -207,6 +190,8 @@ implementation:
     - {inputPath: file_dir}
     - --project-name
     - {inputValue: project_name}
+    - --model-version
+    - {inputValue: model_version}
     - if:
         cond: {isPresent: minio_url}
         then:
@@ -222,17 +207,6 @@ implementation:
         then:
         - --export-bucket
         - {inputValue: export_bucket}
-    - if:
-        cond: {isPresent: model_version}
-        then:
-        - --model-version
-        - {inputValue: model_version}
-    - if:
-        cond: {isPresent: model_format}
-        then:
-        - --model-format
-        - {inputValue: model_format}
     - '----output-paths'
     - {outputPath: s3_address}
     - {outputPath: triton_s3_address}
-    - {outputPath: model_version}
