@@ -1,6 +1,6 @@
-name: Plot Confusion Matrix
-description: Plots a confusion matrix based on a Huggingface Dataset with a test split
-  and a model trained via Keras.
+name: Plot confusion matrix
+description: Plots a confusion matrix based on the test split of a Huggingface, Numpy
+  or Pandas CSV Dataset and a model trained via Keras or ScikitLearn.
 inputs:
 - {name: input_columns, type: 'typing.List[str]', description: 'Input columns for
     the model. Examples: ["mel_spectrogram", "pixel_values"].'}
@@ -13,14 +13,24 @@ inputs:
     from. Example: "/blackboard/model".'}
 - {name: dataset_split, type: String, description: Optional name of a dataset's split.
     Defaults to "test"., default: test, optional: true}
+- {name: num_predictions, type: Integer, description: A number restricting how many
+    predictions should be made. Default value 0 indicates that the whole test dataset
+    should be used, default: '0', optional: true}
 - {name: batch_size, type: Integer, description: 'Optional batch size when processing
     the input dataset. Example: 20.', default: '20', optional: true}
+- {name: seq_len, type: Integer, description: Sequence length for time series datasets.
+    Defaults to 7., default: '7', optional: true}
 outputs:
 - {name: mlpipeline_ui_metadata}
 implementation:
   container:
     image: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest
     command:
+    - sh
+    - -c
+    - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+      'lightgbm' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet
+      --no-warn-script-location 'lightgbm' --user) && "$0" "$@"
     - sh
     - -ec
     - |
@@ -33,17 +43,19 @@ implementation:
           os.makedirs(os.path.dirname(file_path), exist_ok=True)
           return file_path
 
-      def Plot_Confusion_Matrix(
+      def plot_confusion_matrix(
           input_columns,
           label_columns,
           test_dataset_dir,
           model_dir,
           mlpipeline_ui_metadata_path,
           dataset_split = "test",
+          num_predictions = 0,
           batch_size = 20,
+          seq_len = 7,
       ):
           """
-          Plots a confusion matrix based on a Huggingface Dataset with a test split and a model trained via Keras.
+          Plots a confusion matrix based on the test split of a Huggingface, Numpy or Pandas CSV Dataset and a model trained via Keras or ScikitLearn.
 
                   Parameters:
                           input_columns: Input columns for the model. Examples: ["mel_spectrogram", "pixel_values"].
@@ -52,6 +64,8 @@ implementation:
                           model_dir: Directory where to load the model from. Example: "/blackboard/model".
                           dataset_split: Optional name of a dataset's split. Defaults to "test".
                           batch_size: Optional batch size when processing the input dataset. Example: 20.
+                          num_predictions: A number restricting how many predictions should be made. Default value 0 indicates that the whole test dataset should be used
+                          seq_len: Sequence length for time series datasets. Defaults to 7.
                   Returns:
                           mlpipeline_ui_metadata_path: Data to plot a confusion matrix. The plotted confusion matrix can be viewed via Kubeflow UI's Vizualization for this component inside a pipeline run.
           """
@@ -62,6 +76,10 @@ implementation:
           import pandas as pd
           import sys
           import tensorflow as tf
+          from tensorflow import keras
+          import os
+          import joblib
+          import lightgbm
 
           logging.basicConfig(
               stream=sys.stdout,
@@ -70,9 +88,65 @@ implementation:
           )
           logger = logging.getLogger()
 
-          test_dataset = tf.data.experimental.load(test_dataset_dir)
+          def relabel_map(item, label):
+              label = [label]
+              return item, label
 
-          model = tf.keras.models.load_model(model_dir)
+          files = os.listdir(test_dataset_dir)
+          csv = list(filter(lambda x: ".csv" in x, files))
+          npz = list(filter(lambda x: ".npz" in x, files))
+
+          # pandas dataset
+          if len(csv) > 0:
+              path = os.path.join(test_dataset_dir, csv[0])
+              lc = list(label_columns.keys())
+              test_dataset = tf.data.experimental.make_csv_dataset(
+                  path,
+                  batch_size=1,
+                  label_name=lc[0],
+                  select_columns=input_columns + lc,
+              )
+              test_dataset = test_dataset.map(relabel_map)
+              test_dataset = test_dataset.batch(batch_size)
+              logger.info("Loaded CSV dataset.")
+          # numpy dataset
+          elif len(npz) > 0:
+              data = np.load(os.path.join(test_dataset_dir, npz[0]))
+              x, y = data["x"], data["y"]
+              test_dataset = keras.preprocessing.timeseries_dataset_from_array(
+                  x, y, sequence_length=seq_len, batch_size=batch_size
+              )
+              logger.info("Loaded numpy timeseries dataset.")
+          # plain tensorflow dataset
+          else:
+              test_dataset = tf.data.experimental.load(test_dataset_dir)
+              logger.info("Loaded TF dataset.")
+
+          if num_predictions == 0:
+              try:
+                  num_predictions = test_dataset.__len__()
+              except Exception as e:
+                  logger.warning(e)
+                  num_predictions = test_dataset.cardinality().numpy()
+
+          tff, pkl = [], []
+          if os.path.isdir(model_dir):
+              models = os.listdir(model_dir)
+              tff = list(filter(lambda x: ".pb" in x, models))
+              pkl = list(filter(lambda x: ".pkl" in x, models))
+
+          # keras/tf model
+          if len(tff) > 0:
+              model = keras.models.load_model(model_dir)
+          # sklearn model
+          elif len(pkl) > 0:
+              model = joblib.load(os.path.join(model_dir, pkl[0]))
+          # lightgbm/sklearn/otherwise pickled model
+          else:
+              try:
+                  model = joblib.load(model_dir)
+              except Exception as e:
+                  raise Exception("Model format not yet supported:", e)
 
           # see: https://github.com/huggingface/datasets/issues/4772
           if "labels" in label_columns:
@@ -83,14 +157,13 @@ implementation:
 
               if rank != 1 and rank != 2:
                   err = f"Rank of label tensor has to be 1 or 2 but found rank {rank}!"
-                  logger.error(err)
                   raise Exception(err)
 
               # transform one-hot vector into integer
               return tf.math.argmax(label_tensor, axis=rank - 1)
 
           def prediction_to_encoded_tensor(prediction):
-              result = None
+              result = []
               if isinstance(prediction, np.ndarray):
                   if len(prediction) == 1:
                       pred = prediction[0]
@@ -101,7 +174,6 @@ implementation:
                               result.append(np.argmax(pred, axis=0))
                           else:
                               err = f"Unsupport prediction array size: {len(pred[0])}"
-                              logger.error(err)
                               raise Exception(err)
                       elif isinstance(pred, (np.floating, float)):
                           result.append(round(pred))
@@ -109,13 +181,11 @@ implementation:
                           result.append(pred)
                       else:
                           err = f"Unsupport prediction type: {type(pred)}"
-                          logger.error(err)
                           raise Exception(err)
                   elif len(prediction) > 1:
                       result = np.argmax(prediction, axis=0)
                   else:
                       err = f"Unsupport prediction length: {len(prediction)}"
-                      logger.error(err)
                       raise Exception(err)
               elif isinstance(prediction, tf.Tensor):
                   result = ensure_encoding(prediction)
@@ -125,7 +195,6 @@ implementation:
                   result = prediction
               else:
                   err = f"Unsupport model prediction type: {type(prediction)}"
-                  logger.error(err)
                   raise Exception(err)
 
               if isinstance(result, tf.Tensor):
@@ -138,7 +207,6 @@ implementation:
                   result = [result]
               else:
                   err = f"Unsupport result type: {len(result)}"
-                  logger.error(err)
                   raise Exception(err)
 
               return result
@@ -168,7 +236,6 @@ implementation:
                   # Assuming single label
                   if len(label_columns) > 1:
                       err = f"Model provides only 1 output but got {len(label_columns)} label columns!"
-                      logger.error(err)
                       raise Exception(err)
                   key = next(iter(label_columns))
 
@@ -177,10 +244,10 @@ implementation:
                       merge_to_dict(dictionary, key, encoded_tensor)
               else:
                   err = f"Unsupported tensors type: {type(tensors)}!"
-                  logger.error(err)
                   raise Exception(err)
 
           # Get label indexes & names from dataset
+
           index2label = dict()
           label_specs = test_dataset.element_spec[1]
           if isinstance(label_specs, Iterable):
@@ -195,12 +262,20 @@ implementation:
           # each dataset_batch is of size batch_size; results are aggregate inside this loop
           y_true = dict()
           y_pred = dict()
-          for dataset_batch in test_dataset:
+          for dataset_batch in test_dataset.take(num_predictions):
               label_tensors = dataset_batch[1]
               process_tensors(y_true, label_tensors, label_columns, index2label)
 
               feature_tensors = dataset_batch[0]
-              predictions = model.predict(feature_tensors)
+              try:
+                  # keras/tf model
+                  predictions = model.predict(feature_tensors)
+              except ValueError:
+                  # lightgbm/sklearn model trained with numpy arrays
+                  feature_tensors = np.array(list(feature_tensors.values())).T[
+                      0
+                  ]  # .reshape(1, -1)
+                  predictions = model.predict(feature_tensors)
               process_tensors(y_pred, predictions, label_columns, index2label)
 
           logging.info(f"Final labels: {y_true}")
@@ -250,17 +325,19 @@ implementation:
 
       import json
       import argparse
-      _parser = argparse.ArgumentParser(prog='Plot Confusion Matrix', description='Plots a confusion matrix based on a Huggingface Dataset with a test split and a model trained via Keras.')
+      _parser = argparse.ArgumentParser(prog='Plot confusion matrix', description='Plots a confusion matrix based on the test split of a Huggingface, Numpy or Pandas CSV Dataset and a model trained via Keras or ScikitLearn.')
       _parser.add_argument("--input-columns", dest="input_columns", type=json.loads, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--label-columns", dest="label_columns", type=json.loads, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--test-dataset-dir", dest="test_dataset_dir", type=str, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--model-dir", dest="model_dir", type=str, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--dataset-split", dest="dataset_split", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--num-predictions", dest="num_predictions", type=int, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--batch-size", dest="batch_size", type=int, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--seq-len", dest="seq_len", type=int, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--mlpipeline-ui-metadata", dest="mlpipeline_ui_metadata_path", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
       _parsed_args = vars(_parser.parse_args())
 
-      _outputs = Plot_Confusion_Matrix(**_parsed_args)
+      _outputs = plot_confusion_matrix(**_parsed_args)
     args:
     - --input-columns
     - {inputValue: input_columns}
@@ -276,9 +353,19 @@ implementation:
         - --dataset-split
         - {inputValue: dataset_split}
     - if:
+        cond: {isPresent: num_predictions}
+        then:
+        - --num-predictions
+        - {inputValue: num_predictions}
+    - if:
         cond: {isPresent: batch_size}
         then:
         - --batch-size
         - {inputValue: batch_size}
+    - if:
+        cond: {isPresent: seq_len}
+        then:
+        - --seq-len
+        - {inputValue: seq_len}
     - --mlpipeline-ui-metadata
     - {outputPath: mlpipeline_ui_metadata}
