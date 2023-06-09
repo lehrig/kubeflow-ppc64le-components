@@ -1,0 +1,124 @@
+name: Plot confusion matrix
+description: Plots a confusion matrix based on a list of labels and predictions for
+  one target variable
+inputs:
+- name: predictions_dir
+  type: String
+  description: |-
+    Path to directory with 2 files for true labels (ytrue.txt) and predicted labels (ypred.txt).
+    The files should have one label formatted as string per row.
+outputs:
+- {name: mlpipeline_ui_metadata, type: String}
+implementation:
+  container:
+    image: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest
+    command:
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp)
+      printf "%s" "$0" > "$program_path"
+      python3 -u "$program_path" "$@"
+    - |
+      def _make_parent_dirs_and_return_path(file_path: str):
+          import os
+          os.makedirs(os.path.dirname(file_path), exist_ok=True)
+          return file_path
+
+      def plot_confusion_matrix(
+          predictions_dir, mlpipeline_ui_metadata_path
+      ):
+          """
+          Plots a confusion matrix based on a list of labels and predictions for one target variable
+
+                  Parameters:
+                          predictions_dir: Path to directory with 2 files for true labels (ytrue.txt) and predicted labels (ypred.txt).
+                                          The files should have one label formatted as string per row.
+                  Returns:
+                          mlpipeline_ui_metadata_path: Data to plot a confusion matrix. The plotted confusion matrix can be viewed via Kubeflow UI's Vizualization for this component inside a pipeline run.
+          """
+          import json
+          import logging
+          import pandas as pd
+          import sys
+          import tensorflow as tf
+          import os
+
+          logging.basicConfig(
+              stream=sys.stdout,
+              level=logging.INFO,
+              format="%(levelname)s %(asctime)s: %(message)s",
+          )
+          logger = logging.getLogger()
+
+          def load_data(file):
+              with open(os.path.join(predictions_dir, file)) as f:
+                  y = f.readlines()
+              try:
+                  y = list(map(lambda x: int(x.strip("\n")), y))
+                  logger.info(f"Reading {file} as numbers.")
+              except ValueError:
+                  y = list(map(lambda x: x.strip("\n"), y))
+                  logger.info(f"Reading {file} as strings.")
+              return y
+
+          y_true = load_data("ytrue.txt")
+          y_pred = load_data("ypred.txt")
+
+          if len(y_true) != len(y_pred):
+              logger.error("Labels and Predictions have different lengths.")
+
+          labels = list(set(y_true).union(set(y_pred)))
+          logging.info(f"Using the labels {labels}")
+
+          confusion_matrices = []
+          confusion_matrix = tf.math.confusion_matrix(
+              labels=y_true,
+              predictions=y_pred,
+              num_classes=len(labels),
+          )
+
+          data = []
+          for target_index, target_row in enumerate(confusion_matrix):
+              for predicted_index, count in enumerate(target_row):
+                  data.append((labels[target_index], labels[predicted_index], count.numpy()))
+
+          df = pd.DataFrame(data, columns=["target", "predicted", "count"])
+
+          confusion_matrices.append(
+              {
+                  "type": "confusion_matrix",
+                  "format": "csv",
+                  "schema": [
+                      {"name": "target", "type": "CATEGORY"},
+                      {"name": "predicted", "type": "CATEGORY"},
+                      {"name": "count", "type": "NUMBER"},
+                  ],
+                  "storage": "inline",
+                  "source": df.to_csv(
+                      columns=["target", "predicted", "count"], header=False, index=False
+                  ),
+                  "labels": labels,
+              }
+          )
+
+          metadata = {"outputs": confusion_matrices}
+
+          logger.info("Dumping mlpipeline_ui_metadata...")
+          with open(mlpipeline_ui_metadata_path, "w") as metadata_file:
+              json.dump(metadata, metadata_file)
+
+          logger.info("Finished.")
+
+      import argparse
+      _parser = argparse.ArgumentParser(prog='Plot confusion matrix', description='Plots a confusion matrix based on a list of labels and predictions for one target variable')
+      _parser.add_argument("--predictions-dir", dest="predictions_dir", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--mlpipeline-ui-metadata", dest="mlpipeline_ui_metadata_path", type=_make_parent_dirs_and_return_path, required=True, default=argparse.SUPPRESS)
+      _parsed_args = vars(_parser.parse_args())
+
+      _outputs = plot_confusion_matrix(**_parsed_args)
+    args:
+    - --predictions-dir
+    - {inputPath: predictions_dir}
+    - --mlpipeline-ui-metadata
+    - {outputPath: mlpipeline_ui_metadata}
