@@ -19,6 +19,7 @@ create_dataset_quality_report = load_component("monitoring/create-data-quality-r
 monitor_training_comp = load_component("model-building/monitor-training")
 train_model_comp = load_component("model-building/train-model-job")
 plot_confusion_matrix_comp = load_component("model-building/plot-confusion-matrix")
+plot_confusion_matrix_predictions_comp = load_component("model-building/plot-confusion-matrix-from-predictions")
 convert_model_to_onnx_comp = load_component("model-building/convert-to-onnx")
 upload_model_comp = load_component("model-building/upload-model")
 deploy_model_with_kserve_comp = load_component("model-deployment/deploy-model-with-kserve")
