@@ -5,6 +5,8 @@ inputs:
     as supported by Trino. Queries can either use explicit or implicit references
     to schemata and catalogs. In the implicit case, the parameters catalog and schema
     must be set. Example: "SELECT * FROM transactions OFFSET 20".'}
+- {name: columns, type: 'typing.List[str]', description: List of column names of the
+    resulting Dataframe.}
 - {name: columns_query, type: String, description: 'An ANSI SQL compliant "SHOW COLUMNS"
     query for data columns, as supported by Trino. Queries can either use explicit
     or implicit references to schemata and catalogs. In the implicit case, the parameters
@@ -45,6 +47,7 @@ implementation:
       def Load_Dataframe_via_Trino(
           query,
           dataframe_file,
+          columns,
           columns_query = None,
           host = "trino.trino",
           port = 8080,
@@ -57,6 +60,7 @@ implementation:
 
                   Parameters:
                           query: An ANSI SQL compliant query for data, as supported by Trino. Queries can either use explicit or implicit references to schemata and catalogs. In the implicit case, the parameters catalog and schema must be set. Example: "SELECT * FROM transactions OFFSET 20".
+                          columns: List of column names of the resulting Dataframe.
                           columns_query: An ANSI SQL compliant "SHOW COLUMNS" query for data columns, as supported by Trino. Queries can either use explicit or implicit references to schemata and catalogs. In the implicit case, the parameters catalog and schema must be set. If not set, generic column names are used. Example: "SHOW COLUMNS FROM postgresql.public.transactions".
                           host: Host of the trino installation, typically the trino service in the trino namespace. Example:  "trino.trino".
                           port: Trino service port. Example: "8080".
@@ -99,22 +103,32 @@ implementation:
               dataframe = pd.DataFrame(cursor.fetchall())
               logging.info(f"Retrieved {len(dataframe)} rows.")
 
-              if columns_query is not None:
+              if columns is not None:
+                  logging.info("Using given column names...")
+              elif columns_query is not None:
                   logging.info("Querying column names...")
                   cursor.execute(columns_query)
                   columns_dataframe = pd.DataFrame(cursor.fetchall())
                   columns = columns_dataframe[0].values.tolist()
-                  dataframe.columns = columns
-                  logging.info(f"Found columns: {columns}")
+              else:
+                  logging.info("Creating generic column names...")
+                  columns = []
+                  for column in range(dataframe.columns.size):
+                      columns.append(f"column_{column}")
+
+              dataframe.columns = columns
+              logging.info(f"Using columns: {columns}")
 
           # Feather outperforms Pickle & Parquet
           # See https://towardsdatascience.com/the-best-format-to-save-pandas-data-414dca023e0d
           dataframe.to_feather(dataframe_file)
           logging.info("Finished.")
 
+      import json
       import argparse
       _parser = argparse.ArgumentParser(prog='Load Dataframe via Trino', description='Load a Pandas Dataframe using Trino as SQL client.')
       _parser.add_argument("--query", dest="query", type=str, required=True, default=argparse.SUPPRESS)
+      _parser.add_argument("--columns", dest="columns", type=json.loads, required=True, default=argparse.SUPPRESS)
       _parser.add_argument("--columns-query", dest="columns_query", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--host", dest="host", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--port", dest="port", type=int, required=False, default=argparse.SUPPRESS)
@@ -128,6 +142,8 @@ implementation:
     args:
     - --query
     - {inputValue: query}
+    - --columns
+    - {inputValue: columns}
     - if:
         cond: {isPresent: columns_query}
         then:

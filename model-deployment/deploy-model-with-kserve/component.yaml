@@ -132,9 +132,20 @@ implementation:
               ),
           )
 
-          logging.info("Creating inference service...")
           kserve_client = KServeClient()
-          kserve_client.create(inference_service_spec)
+
+          logging.info("Checking for existing inference service...")
+          inference_service = kserve_client.get(project_name, namespace=namespace)
+          logging.info(f"Received: {inference_service}")
+
+          if "status" in inference_service:
+              logging.info("Inference service already exists.")
+
+              logging.info("Patching inference service with new model version...")
+              kserve_client.patch(project_name, inference_service_spec)
+          else:
+              logging.info("Creating inference service...")
+              kserve_client.create(inference_service_spec)
 
           logging.info("Waiting for inference service to start...")
           kserve_client.get(
