@@ -27,11 +27,6 @@ implementation:
     image: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest
     command:
     - sh
-    - -c
-    - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
-      'lightgbm' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet
-      --no-warn-script-location 'lightgbm' --user) && "$0" "$@"
-    - sh
     - -ec
     - |
       program_path=$(mktemp)
@@ -79,7 +74,6 @@ implementation:
           from tensorflow import keras
           import os
           import joblib
-          import lightgbm
 
           logging.basicConfig(
               stream=sys.stdout,

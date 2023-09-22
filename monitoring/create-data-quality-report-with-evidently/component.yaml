@@ -40,11 +40,6 @@ implementation:
     image: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest
     command:
     - sh
-    - -c
-    - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
-      'evidently==0.2.6' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install
-      --quiet --no-warn-script-location 'evidently==0.2.6' --user) && "$0" "$@"
-    - sh
     - -ec
     - |
       program_path=$(mktemp)
