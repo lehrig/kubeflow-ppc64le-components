@@ -13,6 +13,7 @@ def load_component(path):
     return kfp.components.load_component_from_file(component_file)
 
 
+download_and_extract_from_url_comp = load_component("data-collection/download_and_extract_from_url")
 load_dataset_comp = load_component("data-collection/load-huggingface-dataset")
 load_dataframe_via_trino_comp = load_component("data-collection/load-dataframe-via-trino")
 create_dataset_quality_report = load_component("monitoring/create-data-quality-report-with-evidently")
