@@ -12,11 +12,14 @@ inputs:
     v1beta1.', default: v1beta1, optional: true}
 - {name: s3_bucket, type: String, description: 'Name of the s3 bucket in which model
     projects reside. Example: projects.', default: projects, optional: true}
+- {name: storage_uri, type: String, description: 'Optional full storage URI, overriding
+    dynamic URI creating from project_name. Example: gs://kfserving-examples/models/sklearn/1.0/model.',
+  optional: true}
 outputs:
 - {name: Output, type: String}
 implementation:
   container:
-    image: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest
+    image: quay.io/ibm/kubeflow-notebook-image-ppc64le:elyra3.15.0-py3.9-tf2.12.0-pt2.0.1-v2
     command:
     - sh
     - -ec
@@ -31,6 +34,7 @@ implementation:
           explainer_type = None,
           kserve_version = "v1beta1",
           s3_bucket = "projects",
+          storage_uri = None,
       ):
           """
           Deploys a model using KServe and Trino as backend.
@@ -41,6 +45,7 @@ implementation:
                           kserve_version: KServe API version. Example: v1beta1.
                           model_version: Version of the deployed model. Relevant to match explainer version to model version. Example: 1.
                           s3_bucket: Name of the s3 bucket in which model projects reside. Example: projects.
+                          storage_uri: Optional full storage URI, overriding dynamic URI creating from project_name. Example: gs://kfserving-examples/models/sklearn/1.0/model.
                   Returns:
                           endpoint: REST endpoint where the model can be queried. Example: https://my-model-user-example-com.apps.myorg.com.
           """
@@ -76,7 +81,8 @@ implementation:
           config.load_incluster_config()
           namespace = utils.get_default_target_namespace()
           api_version = constants.KSERVE_GROUP + "/" + kserve_version
-          storage_uri: str = f"s3://{s3_bucket}/{project_name}"
+          if storage_uri is None:
+              storage_uri: str = f"s3://{s3_bucket}/{project_name}"
 
           logging.info("Initializing inference service specification...")
           resources_spec = client.V1ResourceRequirements(
@@ -172,6 +178,7 @@ implementation:
       _parser.add_argument("--explainer-type", dest="explainer_type", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--kserve-version", dest="kserve_version", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("--s3-bucket", dest="s3_bucket", type=str, required=False, default=argparse.SUPPRESS)
+      _parser.add_argument("--storage-uri", dest="storage_uri", type=str, required=False, default=argparse.SUPPRESS)
       _parser.add_argument("----output-paths", dest="_output_paths", type=str, nargs=1)
       _parsed_args = vars(_parser.parse_args())
       _output_files = _parsed_args.pop("_output_paths", [])
@@ -213,5 +220,10 @@ implementation:
         then:
         - --s3-bucket
         - {inputValue: s3_bucket}
+    - if:
+        cond: {isPresent: storage_uri}
+        then:
+        - --storage-uri
+        - {inputValue: storage_uri}
     - '----output-paths'
     - {outputPath: Output}
