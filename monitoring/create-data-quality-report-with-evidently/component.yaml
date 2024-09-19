@@ -37,7 +37,7 @@ outputs:
     for the ML Pipeline UI will be saved.}
 implementation:
   container:
-    image: quay.io/ibm/kubeflow-notebook-image-ppc64le:latest
+    image: quay.io/ibm/kubeflow-notebook-image-ppc64le:elyra3.15.0-py3.9-tf2.12.0-pt2.0.1-v2
     command:
     - sh
     - -ec
